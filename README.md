@@ -6,4 +6,4 @@ Welcome to the peridynamics research repository of [John Bartlett](https://www.l
 
 ## Readers of "High-Productivity Parallelism with Python Plus Packages (but without a Cluster)"
 
-The implementation of the peridynamic method present in this work is shared in the 'core' folder. The method descirbed by Algorithm 1 of this work is the '''baseline.py''' script. A few optimizations improving the performance of this implementation are included in the accompanying files.
+The implementation of the peridynamic method present in this work is shared in the 'core' folder. The method descirbed by Algorithm 1 of this work is the 'baseline.py' script. A few optimizations improving the performance of this implementation are included in the accompanying files.
