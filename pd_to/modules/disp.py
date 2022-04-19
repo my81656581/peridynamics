@@ -1,24 +1,27 @@
-
+from mayavi import mlab
 import numpy as np
-from matplotlib import pyplot as plt
+import time
 
+class Display:
 
-class Disp:
-    def __init__(self, geom):
-        coords = geom.d_coords.copy_to_host()
-        x,y = np.unique(coords[0,:]),np.unique(coords[1,:])
-        X,Y = np.meshgrid(x,y)
-        self.NY, self.NX = X.shape
-        self.fig, self.ax = plt.subplots(1)
-        data = np.ones((self.NY, self.NX))
-        heatmap = self.ax.pcolor(data)
-        self.fig.canvas.draw()
-        self.fig.show()
+    def __init__(self, geom, pd):
+        v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
+        v0[0] = 1
+        fig = mlab.figure(size=(600,600))
+        self.vox = mlab.pipeline.volume(mlab.pipeline.scalar_field(v0), vmin=0, vmax=1)
+        self.pd = pd
+        self.geom = geom
 
-    def update(self, d_k):
-        data = np.reshape(d_k.copy_to_host(), (self.NY, self.NX))
-        heatmap = self.ax.pcolor(data)
-        self.ax.draw_artist(self.ax.patch)
-        self.ax.draw_artist(heatmap)
-        self.fig.canvas.blit(self.ax.bbox)
-        self.fig.canvas.flush_events()
+    @mlab.show
+    @mlab.animate(delay=10)
+    def anim(self, vox):
+        while True:
+            self.pd.solve(50)
+            u,v,w = self.pd.get_displacement()
+            vals = np.abs(u)
+            vals = vals/np.max(vals)
+            vox.mlab_source.scalars = np.reshape(vals,(self.geom.NZ,self.geom.NY,self.geom.NX)).T/np.max(vals)
+            yield
+    
+    def launch(self):
+        self.anim(self.vox)
