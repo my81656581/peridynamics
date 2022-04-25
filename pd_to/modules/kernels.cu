@@ -14,11 +14,12 @@ __device__ __constant__ double dt = dtr;
 __device__ __constant__ double appu = appur;
 __device__ __constant__ double ntau = ntaur;
 __device__ __constant__ double rho = rhor;
-__device__ __constant__ double cn = cnr;
+// __device__ __constant__ double cn = cnr;
 __device__ __constant__ double ecrit = ecritr;
 
 __device__ __constant__ double dlmlt = dlmltr;
 __device__ __constant__ double fmlt = fmltr;
+__device__ __constant__ double mvec = mvecr;
 
 __device__ __constant__ float ZERf = 0;
 __device__ __constant__ float ONEf = 1;
@@ -101,7 +102,7 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
     }
 }
 
-__global__ void calcForceState(float *d_Sf, double *d_dil, double *d_u, double *d_du, double *d_ddu, bool *d_dmg) {
+__global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, double *d_F, double *d_vh, double *d_cd, double *d_cn) {
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -126,9 +127,9 @@ __global__ void calcForceState(float *d_Sf, double *d_dil, double *d_u, double *
         double wi = d_u[2*NN+iind];
         double dili = d_dil[iind];
 
-        double pFx = ZER;
-        double pFy = ZER;
-        double pFz = ZER;
+        double fx = ZER;
+        double fy = ZER;
+        double fz = ZER;
 
         for (int64_t b = 0;b<NB;b++){
             float dx2 = sh_Sf[b];
@@ -148,46 +149,89 @@ __global__ void calcForceState(float *d_Sf, double *d_dil, double *d_u, double *
                 double eij = LN - L0;
                 double fsm = dili + dilj + eij/L0*fmlt;
                 double dln = fsm/LN;
-                pFx += dln*A;
-                pFy += dln*B;
-                pFz += dln*C;
+                fx += dln*A;
+                fy += dln*B;
+                fz += dln*C;
             }
         }
 
-        double du = d_du[iind];
-        double dv = d_du[NN+iind];
-        double dw = d_du[2*NN+iind];
-        double ddu = d_ddu[iind];
-        double ddv = d_ddu[NN+iind];
-        double ddw = d_ddu[2*NN+iind];
+        if (xi>0.05+L/TWO && xi<0.95-L/TWO){
+            double vhx = d_vh[iind];
+            double vhy = d_vh[NN + iind];
+            double vhz = d_vh[2*NN + iind];
+            double pfx = d_F[iind];
+            double pfy = d_F[NN + iind];
+            double pfz = d_F[2*NN + iind];
+            double cn = ZER;
+            if(vhx != ZER){
+                cn -= ui*ui*(fx - pfx)/(mvec*dt*vhx);
+            }
+            if(vhy != ZER){
+                cn -= vi*vi*(fy - pfy)/(mvec*dt*vhx);
+            }
+            if(vhz != ZER){
+                cn -= wi*wi*(fz - pfz)/(mvec*dt*vhx);
+            }
+            d_cn[iind] = cn;
+            d_cd[iind] = ui*ui + vi*vi + wi*wi;
+        }
+        
+        d_F[iind] = fx;
+        d_F[NN + iind] = fy;
+        d_F[2*NN + iind] = fz;
+    }
+}
 
-        double vhx = du + dt/TWO*ddu;
-        double vhy = dv + dt/TWO*ddv;
-        double vhz = dw + dt/TWO*ddw;
-        double ddun = (pFx - cn*vhx)/rho;
-        double ddvn = (pFy - cn*vhy)/rho;
-        double ddwn = (pFz - cn*vhz)/rho;
+__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F){
+    int tix = threadIdx.x;
+    int iind = blockIdx.x * blockDim.x + tix;
+    int k = iind/(NX*NY);
+    int j = iind%(NX*NY)/NX;
+    int i = iind%NX;
 
-        if (xi < TRE*L || xi>1-TRE*L){
-            d_u[iind] = appu*(xi-3*L)*min(ONE,tt/ntau);
-        }else{
-            d_u[iind] = ui + dt*du + dt*dt/TWO*ddu;
-            d_du[iind] = du + dt/TWO*(ddu + ddun);
-            d_ddu[iind] = ddun;
+    float xi = L*(i+HLF);
+    float yi = L*(j+HLF);
+    float zi = L*(k+HLF);
+    double c = d_c[0];
+
+    if (Chi(xi,yi,zi)) {
+        double pfx = d_F[iind];
+        double pfy = d_F[NN + iind];
+        double pfz = d_F[2*NN + iind];
+        double bfx = ZER;
+        double bfy = ZER;
+        double bfz = ZER;
+        double vhox = d_vh[iind];
+        double vhoy = d_vh[NN + iind];
+        double vhoz = d_vh[2*NN + iind];
+        double ui = d_u[iind];
+        double vi = d_u[NN + iind];
+        double wi = d_u[2*NN + iind];
+
+        double vhx; double vhy; double vhz;
+
+        if (tt==0){
+            vhx = dt/mvec * (pfx + bfx) / TWO;
+            vhy = dt/mvec * (pfy + bfy) / TWO;
+            vhz = dt/mvec * (pfz + bfz) / TWO;
+        } else {
+            vhx = ((TWO - c*dt)*vhox + TWO*dt/mvec*(pfx + bfx))/(TWO + c*dt);
+            vhy = ((TWO - c*dt)*vhoy + TWO*dt/mvec*(pfy + bfy))/(TWO + c*dt);
+            vhz = ((TWO - c*dt)*vhoz + TWO*dt/mvec*(pfz + bfz))/(TWO + c*dt);
         }
-        if (yi < TRE*L){
-            d_u[NN+iind] = ZER;
-        }else{
-            d_ddu[NN+iind] = ddvn;
-            d_du[NN+iind] = dv + dt/TWO*(ddv + ddvn);
-            d_u[NN+iind] = vi + dt*dv + dt*dt/TWO*ddv;
+
+        if (xi>0.05+L/TWO && xi<0.95-L/TWO){
+            d_u[iind] = ui + dt*vhx;
+            d_u[NN + iind] = vi + dt*vhy;
+            d_u[2*NN + iind] = wi + dt*vhz;
+        }else if(xi>=0.95-L/TWO){
+            double vl = tt/ntau;
+            d_u[iind] = ui + dt*vhx;
+            d_u[NN + iind] = appu*min(ONE, vl);
+            d_u[2*NN + iind] = wi + dt*vhz;
         }
-        if (zi < TRE*L){
-            d_u[2*NN+iind] = ZER;
-        }else{
-            d_ddu[2*NN+iind] = ddwn;
-            d_du[2*NN+iind] = dw + dt/TWO*(ddw + ddwn);
-            d_u[2*NN+iind] = wi + dt*dw + dt*dt/TWO*ddw;
-        }
+        d_vh[iind] = vhx;
+        d_vh[NN + iind] = vhy;
+        d_vh[2*NN + iind] = vhz;
     }
 }

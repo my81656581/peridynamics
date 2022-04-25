@@ -3,6 +3,8 @@ import pycuda.driver as cuda
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
 import time
+import pycuda.reduction as reduction
+import pycuda.gpuarray as gpuarray
 
 
 def makeStencil(hrad = 3.01):
@@ -48,6 +50,7 @@ class PDGeometry:
 		self.L0s = L0s
 		self.jadd = jadd
 		self.mi = mi
+		self.hrad = hrad
 
 class PDBoundaryConditions:
 	def __init__(self, appu, ntau):
@@ -55,11 +58,12 @@ class PDBoundaryConditions:
 		self.ntau = ntau
 
 class PDModel:
-	def __init__(self, mat, geom, bcs, dtype=np.float64):
+	def __init__(self, mat, geom, bcs, dtype=np.float64, TPB = 128):
 		kappa = mat.E/(1-2*mat.nu)/3
 		mu = mat.E/(1+mat.nu)/2
 		cn = mat.tsi*mat.rho*np.pi/geom.L*(mat.E/mat.rho/3/(1-2*mat.nu))**0.5
-		dt = geom.L / np.pi * (mat.rho/mat.E*3*(1-2*mat.nu))**0.5 * ((1+mat.tsi**2)**0.5 - mat.tsi)
+		dt = 1
+		bc = 12*mat.E/np.pi/geom.hrad**4
 
 		source = open("modules\\kernels.cu", "r")
 		src = source.read()
@@ -79,7 +83,9 @@ class PDModel:
 		src = src.replace("ecritr",str(mat.ecrit))
 		src = src.replace("dlmltr",str(geom.L**6/geom.mi/geom.mi*(9*kappa - 15*mu)))
 		src = src.replace("fmltr",str(2*15*mu/geom.mi*geom.L**3))
+		src = src.replace("mvecr",str(.25*dt**2 * 4/3*np.pi*geom.hrad**3 * bc / geom.L **2))
 		src = src.replace("SHr",str(4*geom.NB + 1))
+		src = src.replace("TPB",str(TPB))
 		src = src.replace("L0s[]","L0s["+str(geom.NB)+"] = "+np.array2string(geom.L0s,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
 		src = src.replace("jadd[]","jadd["+str(geom.NB)+"] = "+np.array2string(geom.jadd,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
 
@@ -91,47 +97,66 @@ class PDModel:
 		self.dtype = dtype
 		mod = SourceModule(src, options=["--use_fast_math"])
 
-		self.d_dil = cuda.mem_alloc(geom.NN*dsize)
-		self.d_u = cuda.mem_alloc(3*geom.NN*dsize)
-		self.d_du = cuda.mem_alloc(3*geom.NN*dsize)
-		self.d_ddu = cuda.mem_alloc(3*geom.NN*dsize)
-		self.d_Sf = cuda.mem_alloc_like(geom.Sf)
-		self.d_dmg = cuda.mem_alloc(((geom.NB)*geom.NN + 7)//8)
-		cuda.memcpy_htod(self.d_Sf, geom.Sf)
+		self.d_dil = gpuarray.GPUArray([geom.NN], dtype)
+		self.d_u = gpuarray.GPUArray([3*geom.NN], dtype)
+		self.d_up = gpuarray.GPUArray([3*geom.NN], dtype)
+		self.d_F = gpuarray.GPUArray([3*geom.NN], dtype)
+		self.d_cd = gpuarray.GPUArray([geom.NN], dtype)
+		self.d_cn = gpuarray.GPUArray([geom.NN], dtype)
+		self.d_Sf = gpuarray.to_gpu(geom.Sf)
+		self.d_dmg = gpuarray.GPUArray([((geom.NB)*geom.NN + 7)//8], np.bool_)
 
-		self.d_calcForceState = mod.get_function("calcForceState")
+		self.d_c = cuda.mem_alloc(dsize)
+
+		self.d_calcForce = mod.get_function("calcForce")
 		self.d_calcDilation = mod.get_function("calcDilation")
+		self.d_calcDisplacement = mod.get_function("calcDisplacement")
+		self.sum_reduce = reduction.get_sum_kernel(dtype, dtype)
 
 		# d_calcForceState.set_cache_config(cuda.func_cache.PREFER_L1)
 		# d_calcDilation.set_cache_config(cuda.func_cache.PREFER_L1)
 
+		self.TPB = TPB
 		self.geom = geom
 
-	def solve(self, NT, TPB = 128):
+	def evalC(self):
+		cn1 = self.sum_reduce(self.d_cn).get()
+		cn2 = self.sum_reduce(self.d_cd).get()
+		if (cn2 != 0.0):
+			if ((cn1 / cn2) > 0.0):
+				cn = 2.0 * (cn1 / cn2)**0.5
+			else:
+				cn = 0.0
+		else:
+			cn = 0.0
+		if (cn > 2.0):
+			cn = 1.9
+		return np.array([cn])
+
+	def solve(self, NT):
 		NN = self.geom.NN
 		NB = self.geom.NB
+		TPB = self.TPB
 		d_Sf = self.d_Sf
 		d_dil = self.d_dil
 		d_u = self.d_u
-		d_du = self.d_du
-		d_ddu = self.d_ddu
+		d_up = self.d_up
+		d_F = self.d_F
+		d_cn = self.d_cn
+		d_cd = self.d_cd
+		d_c = self.d_c
 		d_dmg = self.d_dmg
 		BPG = (NN+TPB-1)//TPB
-
-		# print("Begining simulation: ",NN)
-
-		# t0 = time.time()
+		
 		for tt in range(NT):
 			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-			self.d_calcForceState(d_Sf, d_dil, d_u, d_du, d_ddu, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-		pycuda.driver.Context.synchronize()
-		# tm = (time.time()-t0)
-		# print(NN, tt, tm, tm/(tt+1))
+			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			cuda.memcpy_htod(d_c, self.evalC())
+			self.d_calcDisplacement(d_c, d_u, d_up, d_F, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
 
 	def get_displacement(self):
 		NN = self.geom.NN
-		u = np.empty(3*NN,dtype=self.dtype)
-		cuda.memcpy_dtoh(u, self.d_u)
+		u = self.d_u.get()
 		return u[:NN], u[NN:2*NN], u[2*NN:] 
 
 	def get_coords(self):

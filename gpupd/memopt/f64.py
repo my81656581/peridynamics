@@ -3,8 +3,8 @@ import pycuda.autoinit
 from pycuda.compiler import SourceModule
 
 import time
-# from matplotlib import pyplot as plt
-# import matplotlib.animation as anim
+from matplotlib import pyplot as plt
+import matplotlib.animation as anim
 import math
 import numpy as np
 import sys
@@ -265,40 +265,40 @@ dil = np.empty((NN))
 
 print("Begining simulation: ",NN)
 
-t0 = time.time()
-for tt in range(100):
-    d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-    d_calcForceState(d_Sf, d_dil, d_u, d_du, d_ddu, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-pycuda.driver.Context.synchronize()
-tm = (time.time()-t0)
-print(NN, tt, tm, tm/(tt+1))
+# t0 = time.time()
+# for tt in range(100):
+#     d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+#     d_calcForceState(d_Sf, d_dil, d_u, d_du, d_ddu, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+# pycuda.driver.Context.synchronize()
+# tm = (time.time()-t0)
+# print(NN, tt, tm, tm/(tt+1))
 
 
 
-# inds = np.arange(NN)
-# i = (inds%NX)
-# j = (inds%(NX*NY)//NX)
-# k = (inds//(NX*NY))
-# xs = L*i + L/2
-# ys = L*j + L/2
-# zs = L*k + L/2
-# fspc = 4
-# M = 1
-# filt = (i&fspc==0) & (j%fspc==0) & (k%fspc==0)#np.ones(NN)>0#
-# tt = 0
-# u = np.empty(3*NN,dtype=np.float64)
-# def update_graph(n):
-#     global tt
-#     for _ in range(100):
-#         d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = 0)
-#         d_calcForceState(d_Sf, d_dil, d_u, d_du, d_ddu, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = 0)
+inds = np.arange(NN)
+i = (inds%NX)
+j = (inds%(NX*NY)//NX)
+k = (inds//(NX*NY))
+xs = L*i + L/2
+ys = L*j + L/2
+zs = L*k + L/2
+fspc = 4
+M = 1
+filt = np.ones(NN)>0#(i&fspc==0) & (j%fspc==0) & (k%fspc==0)#
+tt = 0
+u = np.empty(3*NN,dtype=np.float64)
+def update_graph(n):
+    global tt
+    for _ in range(25):
+        d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = 0)
+        d_calcForceState(d_Sf, d_dil, d_u, d_du, d_ddu, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = 0)
 
-#     cuda.memcpy_dtoh(u, d_u)
-#     graph._offsets3d = (xs[filt]+M*u[:NN][filt], ys[filt]+M*u[NN:2*NN][filt], zs[filt]+M*u[2*NN:][filt])
+    cuda.memcpy_dtoh(u, d_u)
+    graph._offsets3d = (xs[filt]+M*u[:NN][filt], ys[filt]+M*u[NN:2*NN][filt], zs[filt]+M*u[2*NN:][filt])
 
-# fig = plt.figure()
-# ax = fig.add_subplot(111, projection='3d')
-# ax.plot(xs[filt]+M*appu*(xs[filt]-3*L), ys[filt]-M*appu*nu*(ys[filt]-3*L), zs[filt]-M*appu*nu*(zs[filt]-3*L),'x')
-# graph = ax.scatter(xs[filt], ys[filt], zs[filt])
-# ani = anim.FuncAnimation(fig, update_graph)
-# plt.show()
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.plot(xs[filt]+M*appu*(xs[filt]-3*L), ys[filt]-M*appu*nu*(ys[filt]-3*L), zs[filt]-M*appu*nu*(zs[filt]-3*L),'x')
+graph = ax.scatter(xs[filt], ys[filt], zs[filt])
+ani = anim.FuncAnimation(fig, update_graph)
+plt.show()
