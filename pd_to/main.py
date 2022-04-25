@@ -9,12 +9,12 @@ E = 2e11
 nu = 0.3
 rho = 1250.
 ntau = 500
-appu = 0.1
 
 mat = pd.PDMaterial(E, nu, rho)
 geom = pd.PDGeometry(bbox, NX)
-#TODO: Generalize boundary conditions
-bcs = pd.PDBoundaryConditions(appu, ntau)
-model = pd.PDModel(mat, geom, bcs, dtype=np.float64)
+bcs = pd.PDBoundaryConditions(geom, ntau)
+bcs.addFixed([[0, .05], [0, 1], [0, 1]], 0, [0])
+bcs.addFixed([[.95, 1], [0, 1], [0, 1]], 0.1, [0])
+model = pd.PDModel(mat, geom, bcs, dtype=np.float32)
 dply = disp.Display(geom, model)
 # dply.launch()

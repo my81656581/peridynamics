@@ -53,9 +53,39 @@ class PDGeometry:
 		self.hrad = hrad
 
 class PDBoundaryConditions:
-	def __init__(self, appu, ntau):
-		self.appu = appu
+	def __init__(self, geom, ntau = 500):
 		self.ntau = ntau
+		NN = geom.NN
+		NX = geom.NX
+		NY = geom.NY
+		L = geom.L
+		inds = np.arange(NN)
+		i = (inds%NX)
+		j = (inds%(NX*NY)//NX)
+		k = (inds//(NX*NY))
+		self.x = L*i + L/2
+		self.y = L*j + L/2
+		self.z = L*k + L/2
+		self.NBCi = np.zeros(NN, dtype = np.int32) - 1
+		self.NBC = []
+		self.EBCi = np.zeros((3, NN), dtype = np.int32) - 1
+		self.EBC = []
+
+	def makeFilt(self, bbox):
+		return (self.x>bbox[0][0]) & (self.x<bbox[0][1]) & \
+			   (self.y>bbox[1][0]) & (self.y<bbox[1][1]) & \
+			   (self.z>bbox[2][0]) & (self.z<bbox[2][1])
+
+	def addForce(self, bbox, vec):
+		filt = self.makeFilt(bbox)
+		self.NBCi[filt] = len(self.NBC)
+		self.NBC.append(vec)
+
+	def addFixed(self, bbox, val, dims):
+		filt = self.makeFilt(bbox)
+		for d in dims:
+			self.EBCi[d, filt] = len(self.EBC)
+		self.EBC.append(val)
 
 class PDModel:
 	def __init__(self, mat, geom, bcs, dtype=np.float64, TPB = 128):
@@ -76,7 +106,6 @@ class PDModel:
 		src = src.replace("NZr",str(geom.NZ))
 		src = src.replace("Lr",str(geom.L))
 		src = src.replace("dtr",str(dt))
-		src = src.replace("appur",str(bcs.appu))
 		src = src.replace("ntaur",str(bcs.ntau))
 		src = src.replace("rhor",str(mat.rho))
 		src = src.replace("cnr",str(cn))
@@ -105,6 +134,10 @@ class PDModel:
 		self.d_cn = gpuarray.GPUArray([geom.NN], dtype)
 		self.d_Sf = gpuarray.to_gpu(geom.Sf)
 		self.d_dmg = gpuarray.GPUArray([((geom.NB)*geom.NN + 7)//8], np.bool_)
+		self.d_NBCi = gpuarray.to_gpu(bcs.NBCi)
+		self.d_EBCi = gpuarray.to_gpu(bcs.EBCi.flatten())
+		self.d_NBC = gpuarray.to_gpu(np.array(bcs.NBC).astype(np.float32).flatten())
+		self.d_EBC = gpuarray.to_gpu(np.array(bcs.EBC).astype(np.float32))
 
 		self.d_c = cuda.mem_alloc(dsize)
 
@@ -131,7 +164,7 @@ class PDModel:
 			cn = 0.0
 		if (cn > 2.0):
 			cn = 1.9
-		return np.array([cn])
+		return np.array([cn], dtype = self.dtype)
 
 	def solve(self, NT):
 		NN = self.geom.NN
@@ -146,13 +179,17 @@ class PDModel:
 		d_cd = self.d_cd
 		d_c = self.d_c
 		d_dmg = self.d_dmg
+		d_NBC = self.d_NBC
+		d_EBC = self.d_EBC
+		d_NBCi = self.d_NBCi
+		d_EBCi = self.d_EBCi
 		BPG = (NN+TPB-1)//TPB
 		
 		for tt in range(NT):
 			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, d_EBCi, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 			cuda.memcpy_htod(d_c, self.evalC())
-			self.d_calcDisplacement(d_c, d_u, d_up, d_F, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
+			self.d_calcDisplacement(d_c, d_u, d_up, d_F, d_NBCi, d_NBC, d_EBCi, d_EBC, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
 
 	def get_displacement(self):
 		NN = self.geom.NN
