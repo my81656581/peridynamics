@@ -7,14 +7,16 @@ import matplotlib.animation as anim
 
 class Display:
 
-    def __init__(self, geom, pd):
-        # v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
-        # v0[0] = 1
-        # fig = mlab.figure(size=(600,600))
-        # self.vox = mlab.pipeline.volume(mlab.pipeline.scalar_field(v0), vmin=0, vmax=1)
-        # self.pd = pd
-        # self.geom = geom
+    def __init__(self, geom, pd, num=100):
+        v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
+        v0[0] = 1
+        fig = mlab.figure(size=(600,600))
+        self.vox = mlab.pipeline.volume(mlab.pipeline.scalar_field(v0), vmin=0, vmax=1)
+        self.pd = pd
+        self.geom = geom
+        self.num = num
 
+    def launch_pyplot(self, geom, pd, num=100):
         NN = geom.NN
         NX = geom.NX
         NY = geom.NY
@@ -32,7 +34,9 @@ class Display:
         tt = 0
         u = np.empty(3*NN,dtype=np.float64)
         def update_graph(n):
-            pd.solve(50)
+            pd.solve(num)
+            print("Done")
+            # input(";;;")
             u,v,w = pd.get_displacement()
             graph._offsets3d = (xs[filt]+M*u[filt], ys[filt]+M*v[filt], zs[filt]+M*w[filt])
 
@@ -46,10 +50,11 @@ class Display:
     @mlab.animate(delay=10)
     def anim(self, vox):
         while True:
-            self.pd.solve(100)
-            u,v,w = self.pd.get_displacement()
-            vals = np.sqrt(u**2 + v**2 + w**2)
-            vals = vals/np.max(vals)
+            self.pd.solve(self.num)
+            # u,v,w = self.pd.get_displacement()
+            # vals = np.sqrt(u**2 + v**2 + w**2)
+            vals = self.pd.get_fill()
+            # vals = vals/np.max(vals)
             vox.mlab_source.scalars = np.reshape(vals,(self.geom.NZ,self.geom.NY,self.geom.NX)).T/np.max(vals)
             yield
     

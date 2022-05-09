@@ -51,6 +51,7 @@ class PDGeometry:
 		self.jadd = jadd
 		self.mi = mi
 		self.hrad = hrad
+		self.bbox = bbox
 
 class PDBoundaryConditions:
 	def __init__(self, geom, ntau = 500):
@@ -87,13 +88,35 @@ class PDBoundaryConditions:
 			self.EBCi[d, filt] = len(self.EBC)
 		self.EBC.append(val)
 
+class PDOptimizer:
+	def __init__(self, alpha, volfrac, tol=0.01):
+		self.alpha = alpha
+		self.volfrac = volfrac
+		self.tol = tol
+
+	def step(self, pd):
+		RM = self.volfrac
+		d_Wt = pd.sum_reduce(pd.d_W)
+		while RM > self.tol:
+			cuda.memcpy_htod(self.d_RM, np.array([RM], dtype = pd.dtype))
+			self.d_calcKbar(pd.d_Sf, d_Wt, self.d_RM, pd.d_W, pd.d_dmg, self.d_kbar, block = (pd.TPB, 1, 1), grid = ((pd.geom.NN+pd.TPB-1)//pd.TPB, 1 , 1))
+			AM = pd.sum_reduce(self.d_kbar).get()/pd.geom.NN
+			RM = self.volfrac - AM
+		self.d_updateK(pd.d_k, self.d_kbar, pd.d_NBCi, pd.d_EBCi, block = (pd.TPB, 1, 1), grid = ((pd.geom.NN+pd.TPB-1)//pd.TPB, 1 , 1))
+		k = pd.d_k.get()
+		kb = self.d_kbar.get()
+
 class PDModel:
-	def __init__(self, mat, geom, bcs, dtype=np.float64, TPB = 128):
+	def __init__(self, mat, geom, bcs, opt=None, dtype=np.float64, TPB = 128):
 		kappa = mat.E/(1-2*mat.nu)/3
 		mu = mat.E/(1+mat.nu)/2
 		cn = mat.tsi*mat.rho*np.pi/geom.L*(mat.E/mat.rho/3/(1-2*mat.nu))**0.5
 		dt = 1
 		bc = 12*mat.E/np.pi/geom.hrad**4
+		if opt is None:
+			alpha = 0
+		else:
+			alpha = opt.alpha
 
 		source = open("modules\\kernels.cu", "r")
 		src = source.read()
@@ -117,6 +140,14 @@ class PDModel:
 		src = src.replace("TPB",str(TPB))
 		src = src.replace("L0s[]","L0s["+str(geom.NB)+"] = "+np.array2string(geom.L0s,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
 		src = src.replace("jadd[]","jadd["+str(geom.NB)+"] = "+np.array2string(geom.jadd,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
+		src = src.replace("alphar",str(alpha))
+		src = src.replace("hradr",str(geom.L*geom.hrad))
+		src = src.replace("xlr",str(geom.bbox[0][0]))
+		src = src.replace("xhr",str(geom.bbox[0][1]))
+		src = src.replace("ylr",str(geom.bbox[1][0]))
+		src = src.replace("yhr",str(geom.bbox[1][1]))
+		src = src.replace("zlr",str(geom.bbox[2][0]))
+		src = src.replace("zhr",str(geom.bbox[2][1]))
 
 		dsize = 8
 		if dtype == np.float32:
@@ -141,16 +172,25 @@ class PDModel:
 
 		self.d_c = cuda.mem_alloc(dsize)
 
+		self.d_k = gpuarray.to_gpu(np.ones(geom.NN, dtype=dtype))
+		self.d_W = gpuarray.GPUArray([geom.NN], dtype)
+		
 		self.d_calcForce = mod.get_function("calcForce")
 		self.d_calcDilation = mod.get_function("calcDilation")
 		self.d_calcDisplacement = mod.get_function("calcDisplacement")
 		self.sum_reduce = reduction.get_sum_kernel(dtype, dtype)
+		# self.d_calcForce.set_cache_config(cuda.func_cache.PREFER_L1)
+		# self.d_calcDilation.set_cache_config(cuda.func_cache.PREFER_L1)
 
-		# d_calcForceState.set_cache_config(cuda.func_cache.PREFER_L1)
-		# d_calcDilation.set_cache_config(cuda.func_cache.PREFER_L1)
+		if opt is not None:
+			opt.d_kbar = gpuarray.GPUArray([geom.NN], dtype)
+			opt.d_RM = cuda.mem_alloc(dsize)
+			opt.d_calcKbar = mod.get_function("calcKbar")
+			opt.d_updateK = mod.get_function("updateK")
 
 		self.TPB = TPB
 		self.geom = geom
+		self.opt = opt
 
 	def evalC(self):
 		cn1 = self.sum_reduce(self.d_cn).get()
@@ -183,18 +223,26 @@ class PDModel:
 		d_EBC = self.d_EBC
 		d_NBCi = self.d_NBCi
 		d_EBCi = self.d_EBCi
+		d_W = self.d_W
+		d_k = self.d_k
 		BPG = (NN+TPB-1)//TPB
 		
 		for tt in range(NT):
-			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, d_EBCi, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, d_W, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, d_EBCi, d_k, d_W, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 			cuda.memcpy_htod(d_c, self.evalC())
 			self.d_calcDisplacement(d_c, d_u, d_up, d_F, d_NBCi, d_NBC, d_EBCi, d_EBC, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
+
+		if self.opt is not None:
+			self.opt.step(self)
 
 	def get_displacement(self):
 		NN = self.geom.NN
 		u = self.d_u.get()
 		return u[:NN], u[NN:2*NN], u[2*NN:] 
+	
+	def get_fill(self):
+		return self.d_k.get()
 
 	def get_coords(self):
 		inds = np.arange(self.geom.NN)
