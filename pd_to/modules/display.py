@@ -7,36 +7,26 @@ import matplotlib.animation as anim
 
 class Display:
 
-    def __init__(self, geom, pd, num=100):
+    def __init__(self, geom, pd, num=10000):
         v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
         v0[0] = 1
-        fig = mlab.figure(size=(600,600))
-        self.vox = mlab.pipeline.volume(mlab.pipeline.scalar_field(v0), vmin=0, vmax=1)
+        self.v0 = v0
         self.pd = pd
         self.geom = geom
         self.num = num
 
-    def launch_pyplot(self, geom, pd, num=100):
+    def launch_pyplot(self, num=100):
+        geom = self.geom
+        pd = self.pd
         NN = geom.NN
-        NX = geom.NX
-        NY = geom.NY
-        L = geom.L
-        inds = np.arange(NN)
-        i = (inds%NX)
-        j = (inds%(NX*NY)//NX)
-        k = (inds//(NX*NY))
-        xs = L*i + L/2
-        ys = L*j + L/2
-        zs = L*k + L/2
+        xs = pd.bcs.x
+        ys = pd.bcs.y
+        zs = pd.bcs.z
         fspc = 4
         M = 1
         filt = np.ones(NN)>0#(i&fspc==0) & (j%fspc==0) & (k%fspc==0)#
-        tt = 0
-        u = np.empty(3*NN,dtype=np.float64)
         def update_graph(n):
             pd.solve(num)
-            print("Done")
-            # input(";;;")
             u,v,w = pd.get_displacement()
             graph._offsets3d = (xs[filt]+M*u[filt], ys[filt]+M*v[filt], zs[filt]+M*w[filt])
 
@@ -51,6 +41,7 @@ class Display:
     def anim(self, vox):
         while True:
             self.pd.solve(self.num)
+            print("Updating")
             # u,v,w = self.pd.get_displacement()
             # vals = np.sqrt(u**2 + v**2 + w**2)
             vals = self.pd.get_fill()
@@ -59,4 +50,6 @@ class Display:
             yield
     
     def launch(self):
-        self.anim(self.vox)
+        fig = mlab.figure(size=(600,600))
+        vox = mlab.pipeline.volume(mlab.pipeline.scalar_field(self.v0), vmin=0, vmax=1)
+        self.anim(vox)

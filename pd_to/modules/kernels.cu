@@ -17,6 +17,8 @@ __device__ __constant__ double ecrit = ecritr;
 
 __device__ __constant__ double dlmlt = dlmltr;
 __device__ __constant__ double fmlt = fmltr;
+__device__ __constant__ double kappa = kappar;
+__device__ __constant__ double am = amr;
 __device__ __constant__ double mvec = mvecr;
 
 __device__ __constant__ double hrad = hradr;
@@ -28,6 +30,8 @@ __device__ __constant__ float yh = yhr;
 __device__ __constant__ float yl = ylr;
 __device__ __constant__ float zh = zhr;
 __device__ __constant__ float zl = zlr;
+
+__device__ __constant__ int penal = penalr;
 
 __device__ __constant__ float HLF = 0.5;
 __device__ __constant__ float TRE = 3;
@@ -52,7 +56,41 @@ __device__ void  SetBit(bool A[],  int64_t k ){
     A[k/8] |= 1 << (k%8);
 }
 
-__global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dmg, double *d_W){
+__global__ void calcVolume(float *d_Sf, double *d_m, bool *d_dmg){
+    int tix = threadIdx.x;
+    int iind = blockIdx.x * blockDim.x + tix;
+
+    int k = iind/(NX*NY);
+    int j = iind%(NX*NY)/NX;
+    int i = iind%NX;
+
+    if(tix<NB){
+        sh_Sf[tix] = d_Sf[tix];
+        sh_Sf[NB+tix] = d_Sf[NB+tix];
+        sh_Sf[2*NB+tix] = d_Sf[2*NB+tix];
+    }
+    __syncthreads();
+
+    float xi = L*(i+HLF) + xl;
+    float yi = L*(j+HLF) + yl;
+    float zi = L*(k+HLF) + zl;
+
+    if (Chi(xi,yi,zi)) {
+        double mi = ZER;
+        for (int64_t b = 0;b<NB;b++){
+            float dx2 = sh_Sf[b];
+            float dy2 = sh_Sf[NB+b];
+            float dz2 = sh_Sf[2*NB+b];
+            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+                double L0 = L0s[b];
+                mi += L0*L*L*L;
+            }
+        }
+        d_m[iind] = mi;
+    }
+}
+
+__global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dmg, double *d_W, double *d_m){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -71,14 +109,16 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
     }
     __syncthreads();
 
-    float xi = L*(i+HLF);
-    float yi = L*(j+HLF);
-    float zi = L*(k+HLF);
+    float xi = L*(i+HLF) + xl;
+    float yi = L*(j+HLF) + yl;
+    float zi = L*(k+HLF) + zl;
 
     if (Chi(xi,yi,zi)) {
         double ui = d_u[iind];
         double vi = d_u[NN+iind];
         double wi = d_u[2*NN+iind];
+
+        double mi = d_m[iind];
 
         double dil = ZER;
         for (int64_t b = 0;b<NB;b++){
@@ -91,6 +131,7 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
                 double vj = d_u[NN+jind];
                 double wj = d_u[2*NN+jind];
                 double L0 = L0s[b];
+
                 double A = dx2+uj-ui;
                 double B = dy2+vj-vi;
                 double C = dz2+wj-wi;
@@ -98,17 +139,21 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
                 double eij = LN - L0;
                 if (eij/L0 > ecrit){
                     SetBit(d_dmg, b*NN + iind);
-                    printf("Bond broke");
+                    printf("Bond broken");
                 }else{
-                    dil += eij/L0;
+                    dil += eij*L*L*L;
                 }
+
             }
         }
-        d_dil[iind] = dil*dlmlt;
+        d_dil[iind] = dil*3/mi;
     }
 }
 
-__global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, double *d_F, double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W) {
+__global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, double *d_F, 
+        double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W,
+        double *d_Ft, double *d_m) {
+
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -123,24 +168,23 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
     }
     __syncthreads();
 
-    float xi = L*(i+HLF);
-    float yi = L*(j+HLF);
-    float zi = L*(k+HLF);
-
-    double p = 2;
+    float xi = L*(i+HLF) + xl;
+    float yi = L*(j+HLF) + yl;
+    float zi = L*(k+HLF) + zl;
 
     if (Chi(xi,yi,zi)) {
         double ui = d_u[iind];
         double vi = d_u[NN+iind];
         double wi = d_u[2*NN+iind];
         double dili = d_dil[iind];
-        double ki = pow(d_k[iind],p);
+        double mi = d_m[iind];
+        double ki = pow(d_k[iind],penal);
 
         double fx = ZER;
         double fy = ZER;
         double fz = ZER;
 
-        double Wsm = 0;
+        double Wsm = ki*kappa*dili*dili/2;
 
         for (int64_t b = 0;b<NB;b++){
             float dx2 = sh_Sf[b];
@@ -158,13 +202,33 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
                 double C = dz2+wj-wi;
                 double LN = sqrt(A*A + B*B + C*C);
                 double eij = LN - L0;
-                double kj = pow(d_k[jind],p);
-                double fsm = (ki*dili + kj*dilj + (ki+kj)/2*eij/L0*fmlt);
-                Wsm += fsm*fsm;
-                double dln = fsm/LN;
-                fx += dln*A;
-                fy += dln*B;
-                fz += dln*C;
+                double mj = d_m[jind];
+                double kj = pow(d_k[jind],penal);
+                // double fsm = (ki*dili + kj*dilj + (ki+kj)/2*eij/L0*fmlt);
+                
+                double tij = ki*(3*kappa*dili + am*(eij/L0 - dili/3))/mi; // ADD IN ki, kj!!
+                double tji = kj*(3*kappa*dilj + am*(eij/L0 - dilj/3))/mj;
+                double fsm = (tij + tji)*L*L*L;
+
+                // double Wi = ki*(kappa*dili*dili/2/mi + am/mi/2*(eij/L0 - dili/3)*(eij - dili*L0/3));
+                // double Wj = kj*(kappa*dilj*dilj/2/mj + am/mj/2*(eij/L0 - dilj/3)*(eij - dilj*L0/3));
+                // Wsm += (Wi + Wj)/2;
+
+                // double Wi = ki*(am*(eij/L0 - dili/3))/mi;
+                // Wsm += Wi*Wi;
+
+
+                // double Wi = ki*(1/L0)*(eij - dili*L0/3)*am/mi;
+                // Wsm += Wi*Wi;
+
+                double Wi = (ki*am/mi)*(kj*am/mj)*(1/L0)*(eij - dili*L0/3)*(eij - dili*L0/3);
+                double Wtest = (ki*kj)/(ki + kj)/(LN - L0)*(LN - L0)/L0;
+                Wsm += Wi;
+
+
+                fx += fsm*A/LN;
+                fy += fsm*B/LN;
+                fz += fsm*C/LN;
             }
         }
 
@@ -199,6 +263,7 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
         d_F[2*NN + iind] = fz;
         
         if(ebcx<0 && ebcy<0 && ebcz<0){
+            d_Ft[iind] = sqrt(fx*fx + fy*fy + fz*fz);
             d_W[iind] = Wsm;
         }
     }
@@ -211,9 +276,9 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
     int j = iind%(NX*NY)/NX;
     int i = iind%NX;
 
-    float xi = L*(i+HLF);
-    float yi = L*(j+HLF);
-    float zi = L*(k+HLF);
+    float xi = L*(i+HLF) + xl;
+    float yi = L*(j+HLF) + yl;
+    float zi = L*(k+HLF) + zl;
     double c = d_c[0];
 
     if (Chi(xi,yi,zi)) {
@@ -288,9 +353,9 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
     }
     __syncthreads();
 
-    float xi = L*(i+HLF);
-    float yi = L*(j+HLF);
-    float zi = L*(k+HLF);
+    float xi = L*(i+HLF) + xl;
+    float yi = L*(j+HLF) + yl;
+    float zi = L*(k+HLF) + zl;
 
     double Wt = d_Wt[0];
     double RM = d_RM[0];

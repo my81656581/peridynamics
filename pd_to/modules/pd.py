@@ -64,13 +64,14 @@ class PDBoundaryConditions:
 		i = (inds%NX)
 		j = (inds%(NX*NY)//NX)
 		k = (inds//(NX*NY))
-		self.x = L*i + L/2
-		self.y = L*j + L/2
-		self.z = L*k + L/2
+		self.x = L*i + L/2 + geom.bbox[0][0]
+		self.y = L*j + L/2 + geom.bbox[1][0]
+		self.z = L*k + L/2 + geom.bbox[2][0]
 		self.NBCi = np.zeros(NN, dtype = np.int32) - 1
 		self.NBC = []
 		self.EBCi = np.zeros((3, NN), dtype = np.int32) - 1
 		self.EBC = []
+		self.geom = geom
 
 	def makeFilt(self, bbox):
 		return (self.x>bbox[0][0]) & (self.x<bbox[0][1]) & \
@@ -82,17 +83,31 @@ class PDBoundaryConditions:
 		self.NBCi[filt] = len(self.NBC)
 		self.NBC.append(vec)
 
+	def addDistributedForce(self, bbox, vec):
+		filt = self.makeFilt(bbox)
+		self.NBCi[filt] = len(self.NBC)
+		self.NBC.append(vec/np.sum(filt)/self.geom.L**3)
+
 	def addFixed(self, bbox, val, dims):
 		filt = self.makeFilt(bbox)
 		for d in dims:
 			self.EBCi[d, filt] = len(self.EBC)
 		self.EBC.append(val)
 
+	def addFixedFunctional(self, bbox, func):
+		filt = self.makeFilt(bbox)
+		vals = func(self.x[filt], self.y[filt], self.z[filt])
+		for d in range(3):
+			self.EBCi[d, filt] = len(self.EBC) + np.arange(len(vals[d]))
+			[self.EBC.append(val) for val in vals[d]]
+
+
 class PDOptimizer:
-	def __init__(self, alpha, volfrac, tol=0.01):
+	def __init__(self, alpha, volfrac, penal, tol=0.000001):
 		self.alpha = alpha
 		self.volfrac = volfrac
 		self.tol = tol
+		self.penal = penal
 
 	def step(self, pd):
 		RM = self.volfrac
@@ -110,6 +125,7 @@ class PDModel:
 	def __init__(self, mat, geom, bcs, opt=None, dtype=np.float64, TPB = 128):
 		kappa = mat.E/(1-2*mat.nu)/3
 		mu = mat.E/(1+mat.nu)/2
+		am = 15*mu
 		cn = mat.tsi*mat.rho*np.pi/geom.L*(mat.E/mat.rho/3/(1-2*mat.nu))**0.5
 		dt = 1
 		bc = 12*mat.E/np.pi/geom.hrad**4
@@ -141,6 +157,8 @@ class PDModel:
 		src = src.replace("L0s[]","L0s["+str(geom.NB)+"] = "+np.array2string(geom.L0s,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
 		src = src.replace("jadd[]","jadd["+str(geom.NB)+"] = "+np.array2string(geom.jadd,separator = ',',max_line_width=np.nan).replace('[','{').replace(']','}'))
 		src = src.replace("alphar",str(alpha))
+		src = src.replace("amr",str(am))
+		src = src.replace("kappar",str(kappa))
 		src = src.replace("hradr",str(geom.L*geom.hrad))
 		src = src.replace("xlr",str(geom.bbox[0][0]))
 		src = src.replace("xhr",str(geom.bbox[0][1]))
@@ -148,6 +166,10 @@ class PDModel:
 		src = src.replace("yhr",str(geom.bbox[1][1]))
 		src = src.replace("zlr",str(geom.bbox[2][0]))
 		src = src.replace("zhr",str(geom.bbox[2][1]))
+		if opt is None:
+			src = src.replace("penalr",str(0))
+		else:
+			src = src.replace("penalr",str(opt.penal))
 
 		dsize = 8
 		if dtype == np.float32:
@@ -157,6 +179,7 @@ class PDModel:
 		self.dtype = dtype
 		mod = SourceModule(src, options=["--use_fast_math"])
 
+		self.d_m = gpuarray.GPUArray([geom.NN], dtype)
 		self.d_dil = gpuarray.GPUArray([geom.NN], dtype)
 		self.d_u = gpuarray.GPUArray([3*geom.NN], dtype)
 		self.d_up = gpuarray.GPUArray([3*geom.NN], dtype)
@@ -174,7 +197,9 @@ class PDModel:
 
 		self.d_k = gpuarray.to_gpu(np.ones(geom.NN, dtype=dtype))
 		self.d_W = gpuarray.GPUArray([geom.NN], dtype)
+		self.d_Ft = gpuarray.GPUArray([geom.NN], dtype)
 		
+		self.d_calcVolume = mod.get_function("calcVolume")
 		self.d_calcForce = mod.get_function("calcForce")
 		self.d_calcDilation = mod.get_function("calcDilation")
 		self.d_calcDisplacement = mod.get_function("calcDisplacement")
@@ -191,6 +216,8 @@ class PDModel:
 		self.TPB = TPB
 		self.geom = geom
 		self.opt = opt
+		self.bcs = bcs
+		self.ft = 0
 
 	def evalC(self):
 		cn1 = self.sum_reduce(self.d_cn).get()
@@ -225,13 +252,24 @@ class PDModel:
 		d_EBCi = self.d_EBCi
 		d_W = self.d_W
 		d_k = self.d_k
+		d_Ft = self.d_Ft
+		d_m = self.d_m
 		BPG = (NN+TPB-1)//TPB
+
+		self.d_calcVolume(d_Sf, d_m, d_dmg, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 		
 		for tt in range(NT):
-			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, d_W, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
-			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, d_EBCi, d_k, d_W, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcDilation(d_Sf, d_u, d_dil, d_dmg, d_W, d_m, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcForce(d_Sf, d_dil, d_u, d_dmg, d_F, d_up, d_cd, d_cn, d_EBCi, d_k, d_W, d_Ft, d_m, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 			cuda.memcpy_htod(d_c, self.evalC())
 			self.d_calcDisplacement(d_c, d_u, d_up, d_F, d_NBCi, d_NBC, d_EBCi, d_EBC, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
+			if tt%50==0:
+				ft = self.sum_reduce(d_Ft).get()
+				print(tt, ft, self.ft)
+				if ft>self.ft:
+					self.ft = ft
+				elif ft<0.0001*self.ft:
+					break
 
 		if self.opt is not None:
 			self.opt.step(self)
@@ -243,6 +281,9 @@ class PDModel:
 	
 	def get_fill(self):
 		return self.d_k.get()
+
+	def get_W(self):
+		return self.d_W.get()
 
 	def get_coords(self):
 		inds = np.arange(self.geom.NN)
