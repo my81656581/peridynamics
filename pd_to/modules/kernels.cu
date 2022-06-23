@@ -375,7 +375,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
                 dsm += psi;
             }
         }
-        d_kbar[iind] = max(0.000001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.001, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 

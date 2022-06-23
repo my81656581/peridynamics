@@ -268,7 +268,7 @@ class PDModel:
 				print(tt, ft, self.ft)
 				if ft>self.ft:
 					self.ft = ft
-				elif ft<0.0001*self.ft:
+				elif ft<0.001*self.ft:
 					break
 
 		if self.opt is not None:

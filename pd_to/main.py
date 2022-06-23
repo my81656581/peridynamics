@@ -6,21 +6,21 @@ import time
 
 NX = int(sys.argv[1])
 # bbox = [[-.5, .5], [-.5, .5], [0, 1]] # Bounding box for geometry
-bbox = [[0, 100], [0, 50], [0, 7]]
+bbox = [[0, 80], [0, 40], [0, 5]]
 hrad = 3.01
 E = 2e11
-nu = 0.25
+nu = 0.333
 rho = 1250.
 ntau = 500
 alpha = 0.3
 volfrac = 0.5
-penal = 2
+penal = 3
 
 mat = pd.PDMaterial(E, nu, rho)
 geom = pd.PDGeometry(bbox, NX, hrad)
 bcs = pd.PDBoundaryConditions(geom, ntau)
-bcs.addFixed([[0, 1], [0, 50], [0, 7]], 0, [0,1,2])
-bcs.addFixed([[99,100], [24, 26], [0, 7]], -0.001, [1])
+bcs.addFixed([[0, 1], [0, 40], [0, 5]], 0, [0,1,2])
+bcs.addFixed([[79,80], [19, 21], [0, 5]], -0.001, [1])
 # bcs.addDistributedForce([[99,100], [24, 26], [0, 7]], 10000000*np.array([0,-1,0]))
 
 # bcs.addFixed([[-.5, .5], [-.5, .5], [0, 0.05]], 0, [0,1,2])
