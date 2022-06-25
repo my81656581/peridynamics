@@ -118,9 +118,7 @@ class PDOptimizer:
 			AM = pd.sum_reduce(self.d_kbar).get()/pd.geom.NN
 			RM = self.volfrac - AM
 		self.d_updateK(pd.d_k, self.d_kbar, pd.d_NBCi, pd.d_EBCi, block = (pd.TPB, 1, 1), grid = ((pd.geom.NN+pd.TPB-1)//pd.TPB, 1 , 1))
-		k = pd.d_k.get()
-		kb = self.d_kbar.get()
-
+		
 class PDModel:
 	def __init__(self, mat, geom, bcs, opt=None, dtype=np.float64, TPB = 128):
 		kappa = mat.E/(1-2*mat.nu)/3
@@ -265,14 +263,11 @@ class PDModel:
 			self.d_calcDisplacement(d_c, d_u, d_up, d_F, d_NBCi, d_NBC, d_EBCi, d_EBC, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
 			if tt%50==0:
 				ft = self.sum_reduce(d_Ft).get()
-				print(tt, ft, self.ft)
 				if ft>self.ft:
 					self.ft = ft
-				elif ft<0.001*self.ft:
+				print(tt, ft/self.ft)
+				if ft<0.0001*self.ft:
 					break
-
-		if self.opt is not None:
-			self.opt.step(self)
 
 	def get_displacement(self):
 		NN = self.geom.NN

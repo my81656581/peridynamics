@@ -222,7 +222,6 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
                 // Wsm += Wi*Wi;
 
                 double Wi = (ki*am/mi)*(kj*am/mj)*(1/L0)*(eij - dili*L0/3)*(eij - dili*L0/3);
-                double Wtest = (ki*kj)/(ki + kj)/(LN - L0)*(LN - L0)/L0;
                 Wsm += Wi;
 
 
@@ -375,7 +374,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
                 dsm += psi;
             }
         }
-        d_kbar[iind] = max(0.001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.00001, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 

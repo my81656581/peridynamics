@@ -7,13 +7,14 @@ import matplotlib.animation as anim
 
 class Display:
 
-    def __init__(self, geom, pd, num=10000):
+    def __init__(self, geom, pd, opt, num=10000):
         v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
         v0[0] = 1
         self.v0 = v0
         self.pd = pd
         self.geom = geom
         self.num = num
+        self.opt = opt
 
     def launch_pyplot(self, num=100):
         geom = self.geom
@@ -22,9 +23,9 @@ class Display:
         xs = pd.bcs.x
         ys = pd.bcs.y
         zs = pd.bcs.z
-        fspc = 4
-        M = 1
-        filt = np.ones(NN)>0#(i&fspc==0) & (j%fspc==0) & (k%fspc==0)#
+        M = 100
+        fill = self.pd.get_fill()
+        filt = fill>0.05
         def update_graph(n):
             pd.solve(num)
             u,v,w = pd.get_displacement()
@@ -33,6 +34,9 @@ class Display:
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
         graph = ax.scatter(xs[filt], ys[filt], zs[filt])
+        # manager = plt.get_current_fig_manager()
+        # manager.full_screen_toggle()
+        ax.set_box_aspect((np.ptp(xs), np.ptp(ys), np.ptp(zs)))
         ani = anim.FuncAnimation(fig, update_graph)
         plt.show()
 
@@ -41,7 +45,8 @@ class Display:
     def anim(self, vox):
         while True:
             self.pd.solve(self.num)
-            print("Updating")
+            # print("Updating")
+            self.opt.step(self.pd)
             # u,v,w = self.pd.get_displacement()
             # vals = np.sqrt(u**2 + v**2 + w**2)
             vals = self.pd.get_fill()

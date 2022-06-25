@@ -4,44 +4,48 @@ import modules.pd as pd
 import sys
 import time
 
-NX = int(sys.argv[1])
-# bbox = [[-.5, .5], [-.5, .5], [0, 1]] # Bounding box for geometry
+# NX = int(sys.argv[1])
+
 bbox = [[0, 80], [0, 40], [0, 5]]
-hrad = 3.01
 E = 2e11
 nu = 0.333
+volfrac = 0.5
+penal = 3
+NX = int(bbox[0][1])
+
+# bbox = [[0, 160], [0, 20], [0, 7]]
+# E = 30e6
+# nu = 0.3
+# volfrac = 0.2
+# penal = 2
+# NX = 2*int(bbox[0][1])
+
+hrad = 3.01
 rho = 1250.
 ntau = 500
 alpha = 0.3
-volfrac = 0.5
-penal = 3
 
 mat = pd.PDMaterial(E, nu, rho)
 geom = pd.PDGeometry(bbox, NX, hrad)
 bcs = pd.PDBoundaryConditions(geom, ntau)
 bcs.addFixed([[0, 1], [0, 40], [0, 5]], 0, [0,1,2])
-bcs.addFixed([[79,80], [19, 21], [0, 5]], -0.001, [1])
-# bcs.addDistributedForce([[99,100], [24, 26], [0, 7]], 10000000*np.array([0,-1,0]))
+bcs.addFixed([[79,80], [19, 21], [0, 5]], -0.1, [1])
 
-# bcs.addFixed([[-.5, .5], [-.5, .5], [0, 0.05]], 0, [0,1,2])
-# tht = np.pi/20
-# def u_tor(x, y, z):
-#     return x*np.cos(tht) - y*np.sin(tht) - x,   \
-#             x*np.sin(tht) + y*np.cos(tht) - y,   \
-#             np.zeros(z.shape)
-
-# bcs.addFixedFunctional([[-.5, .5], [-.5, .5], [.95, 1]], u_tor)
-        
-
+# bcs.addFixed([[0, 1], [0, 20], [0, 10]], 0, [0,1,2])
+# bcs.addFixed([[159, 160], [0, 20], [0, 10]], 0, [0,1,2])
+# bcs.addFixed([[79,81], [0, 1], [0, 10]], -0.1, [1])
+# bcs.addDistributedForce([[79,81], [0, 1], [0, 5]], 1000000*np.array([0,-1,0]))
 
 opt = pd.PDOptimizer(alpha, volfrac, penal)
 model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float64)
 
 # t0 = time.time()
-# model.solve(2000)
+# model.solve(500)
 # model.get_fill()
 # print(geom.NN, time.time()-t0)
 
-dply = disp.Display(geom, model)
+dply = disp.Display(geom, model, opt)
 dply.launch()
-# dply.launch_pyplot()
+# while True:
+#     dply.launch_pyplot()
+#     opt.step(model)
