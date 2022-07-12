@@ -7,7 +7,7 @@ import scipy.io
 from matplotlib import pyplot as plt
 
 
-chi = scipy.io.loadmat('sphere1_128.mat')['in'].astype(np.bool_)
+chi = scipy.io.loadmat('../geometries/sphere1_128.mat')['in'].astype(np.bool_)
 whr = np.where(chi)
 chi = chi[np.min(whr[0]):np.max(whr[0])+1, np.min(whr[1]):np.max(whr[1])+1, np.min(whr[2]):np.max(whr[2])+1]
 bbox = [[-chi.shape[0]/2,chi.shape[0]/2], [-chi.shape[1]/2,chi.shape[1]/2],[0, chi.shape[2]]]
