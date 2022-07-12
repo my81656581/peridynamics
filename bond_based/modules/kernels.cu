@@ -40,7 +40,7 @@ __device__ int tt = 0;
 
 __device__ __shared__ float sh_Sf[SHr]; // 4*NB + 1
 
-__device__ bool Chi(float x, float y, float z){
+__device__ bool TestBbox(float x, float y, float z){
     return (x>=xl) && (x<=xh) && (y>=yl) && (y<=yh) && (z>=zl) && (z<=zh);
 }
 
@@ -54,7 +54,7 @@ __device__ void  SetBit(bool A[],  int64_t k ){
 
 __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F, 
         double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W,
-        double *d_Ft) {
+        double *d_Ft, bool *d_chi) {
 
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
@@ -78,7 +78,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
     float yi = L*(j+HLF) + yl;
     float zi = L*(k+HLF) + zl;
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double ui = d_u[iind];
         double vi = d_u[NN+iind];
         double wi = d_u[2*NN+iind];
@@ -94,27 +94,29 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
-                double uj = d_u[jind];
-                double vj = d_u[NN+jind];
-                double wj = d_u[2*NN+jind];
-                double L0 = L0s[b];
-                double A = dx2+uj-ui;
-                double B = dy2+vj-vi;
-                double C = dz2+wj-wi;
-                double LN = sqrt(A*A + B*B + C*C);
-                double eij = LN - L0;
-                if (eij/L0 > ecrit){
-                    SetBit(d_dmg, b*NN + iind);
-                    printf("Bond broken");
-                }else{
-                    double kj = pow(d_k[jind],penal);
-                    double fsm = 2*(ki*kj)/(ki + kj)*eij/L0*bc*dV;
-                    fx += fsm*A/LN;
-                    fy += fsm*B/LN;
-                    fz += fsm*C/LN;
-                    Wsm += 2*(ki*kj)/(ki + kj)*0.5*0.5*bc*eij*eij/L0*dV;
+                if(d_chi[jind]){
+                    double uj = d_u[jind];
+                    double vj = d_u[NN+jind];
+                    double wj = d_u[2*NN+jind];
+                    double L0 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2);//L0s[b];
+                    double A = dx2+uj-ui;
+                    double B = dy2+vj-vi;
+                    double C = dz2+wj-wi;
+                    double LN = sqrt(A*A + B*B + C*C);
+                    double eij = LN - L0;
+                    if (eij/L0 > ecrit){
+                        SetBit(d_dmg, b*NN + iind);
+                        printf("Bond broken");
+                    }else{
+                        double kj = pow(d_k[jind],penal);
+                        double fsm = 2*(ki*kj)/(ki + kj)*eij/L0*bc*dV;
+                        fx += fsm*A/LN;
+                        fy += fsm*B/LN;
+                        fz += fsm*C/LN;
+                        Wsm += 2*(ki*kj)/(ki + kj)*0.5*0.5*bc*eij*eij/L0*dV;
+                    }
                 }
             }
         }
@@ -156,7 +158,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
     }
 }
 
-__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC, double *d_k){
+__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC, double *d_k, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
     int k = iind/(NX*NY);
@@ -168,7 +170,7 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
     float zi = L*(k+HLF) + zl;
     double c = d_c[0];
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double pfx = d_F[iind];
         double pfy = d_F[NN + iind];
         double pfz = d_F[2*NN + iind];
@@ -221,7 +223,7 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
     }
 }
 
-__global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, bool *d_dmg, double *d_kbar){
+__global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, bool *d_dmg, double *d_kbar, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -243,7 +245,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
     double Wt = d_Wt[0];
     double RM = d_RM[0];
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double kopti = d_W[iind] *NN * RM / Wt;
         double nsm = kopti*hrad;
         double dsm = hrad;
@@ -251,11 +253,13 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
-                double psi = max(ZER, hrad - L0s[b]);
-                nsm += psi * d_W[jind] * NN * RM / Wt;
-                dsm += psi;
+                if(d_chi[jind]){
+                    double psi = max(ZER, hrad - L0s[b]);
+                    nsm += psi * d_W[jind] * NN * RM / Wt;
+                    dsm += psi;
+                }
             }
         }
         d_kbar[iind] = max(0.0001, min(ONE, d_kbar[iind] + nsm / dsm));

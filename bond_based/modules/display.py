@@ -7,7 +7,7 @@ import matplotlib.animation as anim
 
 class Display:
 
-    def __init__(self, geom, pd, opt, num=10000, tol = 0.001):
+    def __init__(self, geom, pd, opt=None, num=10000, tol = 0.001):
         v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
         v0[0] = 1
         self.v0 = v0
@@ -24,9 +24,8 @@ class Display:
         xs = pd.bcs.x
         ys = pd.bcs.y
         zs = pd.bcs.z
-        M = 2
-        fill = self.pd.get_fill()
-        filt = fill>0.05
+        M = 4
+        filt = geom.chi
         def update_graph(n):
             pd.solve(num)
             print(num)
