@@ -114,7 +114,7 @@ class PDBoundaryConditions:
 	def addFixedFunctional(self, bbox, func):
 		filt = self.makeFilt(bbox)
 		vals = func(self.x[filt], self.y[filt], self.z[filt])
-		for d in range(3):
+		for d in range(len(vals)):
 			if vals[d] is not None:
 				self.EBCi[d, filt] = len(self.EBC) + np.arange(len(vals[d]))
 				[self.EBC.append(val) for val in vals[d]]

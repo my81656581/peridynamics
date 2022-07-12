@@ -7,7 +7,7 @@ import matplotlib.animation as anim
 
 class Display:
 
-    def __init__(self, geom, pd, opt, num=10000):
+    def __init__(self, geom, pd, opt=None, num=10000, tol = 0.001):
         v0 = np.zeros((geom.NX, geom.NY, geom.NZ))
         v0[0] = 1
         self.v0 = v0
@@ -15,6 +15,7 @@ class Display:
         self.geom = geom
         self.num = num
         self.opt = opt
+        self.tol = tol
 
     def launch_pyplot(self, num=100):
         geom = self.geom
@@ -23,11 +24,11 @@ class Display:
         xs = pd.bcs.x
         ys = pd.bcs.y
         zs = pd.bcs.z
-        M = 100
-        fill = self.pd.get_fill()
-        filt = fill>0.05
+        M = 4
+        filt = geom.chi
         def update_graph(n):
             pd.solve(num)
+            print(num)
             u,v,w = pd.get_displacement()
             graph._offsets3d = (xs[filt]+M*u[filt], ys[filt]+M*v[filt], zs[filt]+M*w[filt])
 
@@ -44,7 +45,7 @@ class Display:
     @mlab.animate(delay=10)
     def anim(self, vox):
         while True:
-            self.pd.solve(self.num)
+            self.pd.solve(self.num, tol = self.tol)
             # print("Updating")
             self.opt.step(self.pd)
             # u,v,w = self.pd.get_displacement()

@@ -14,15 +14,12 @@ __device__ __constant__ double dt = dtr;
 __device__ __constant__ double ntau = ntaur;
 __device__ __constant__ double rho = rhor;
 __device__ __constant__ double ecrit = ecritr;
-
-__device__ __constant__ double dlmlt = dlmltr;
-__device__ __constant__ double fmlt = fmltr;
+__device__ __constant__ double bc = bcr;
 __device__ __constant__ double kappa = kappar;
 __device__ __constant__ double am = amr;
-__device__ __constant__ double mvec = mvecr;
-
-__device__ __constant__ double hrad = hradr;
-__device__ __constant__ double alpha = alphar;
+__device__ __constant__ double dV = dVr;
+__device__ __constant__ double mass = massr;
+__device__ __constant__ double MLT = MLTr;
 
 __device__ __constant__ float xh = xhr;
 __device__ __constant__ float xl = xlr;
@@ -32,10 +29,11 @@ __device__ __constant__ float zh = zhr;
 __device__ __constant__ float zl = zlr;
 
 __device__ __constant__ int penal = penalr;
+__device__ __constant__ double alpha = alphar;
+__device__ __constant__ double hrad = hradr;
 
 __device__ __constant__ float HLF = 0.5;
 __device__ __constant__ float TRE = 3;
-
 __device__ __constant__ double ZER = 0;
 __device__ __constant__ double ONE = 1;
 __device__ __constant__ double TWO = 2;
@@ -44,7 +42,7 @@ __device__ int tt = 0;
 
 __device__ __shared__ float sh_Sf[SHr]; // 4*NB + 1
 
-__device__ bool Chi(float x, float y, float z){
+__device__ bool TestBbox(float x, float y, float z){
     return (x>=xl) && (x<=xh) && (y>=yl) && (y<=yh) && (z>=zl) && (z<=zh);
 }
 
@@ -56,7 +54,7 @@ __device__ void  SetBit(bool A[],  int64_t k ){
     A[k/8] |= 1 << (k%8);
 }
 
-__global__ void calcVolume(float *d_Sf, double *d_m, bool *d_dmg){
+__global__ void calcVolume(float *d_Sf, double *d_m, bool *d_dmg, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -75,22 +73,25 @@ __global__ void calcVolume(float *d_Sf, double *d_m, bool *d_dmg){
     float yi = L*(j+HLF) + yl;
     float zi = L*(k+HLF) + zl;
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double mi = ZER;
         for (int64_t b = 0;b<NB;b++){
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
-                double L0 = L0s[b];
-                mi += L0*L*L*L;
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+                int jind = iind + jadd[b];
+                if(d_chi[jind]){
+                    double L0 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2);
+                    mi += L0*L*L*L;
+                }
             }
         }
         d_m[iind] = mi;
     }
 }
 
-__global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dmg, double *d_W, double *d_m){
+__global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dmg, double *d_m, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -113,7 +114,7 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
     float yi = L*(j+HLF) + yl;
     float zi = L*(k+HLF) + zl;
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double ui = d_u[iind];
         double vi = d_u[NN+iind];
         double wi = d_u[2*NN+iind];
@@ -125,34 +126,35 @@ __global__ void calcDilation(float *d_Sf, double *d_u, double *d_dil, bool *d_dm
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
-                double uj = d_u[jind];
-                double vj = d_u[NN+jind];
-                double wj = d_u[2*NN+jind];
-                double L0 = L0s[b];
+                if(d_chi[jind]){
+                    double uj = d_u[jind];
+                    double vj = d_u[NN+jind];
+                    double wj = d_u[2*NN+jind];
+                    double L0 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2);
 
-                double A = dx2+uj-ui;
-                double B = dy2+vj-vi;
-                double C = dz2+wj-wi;
-                double LN = sqrt(A*A + B*B + C*C);
-                double eij = LN - L0;
-                if (eij/L0 > ecrit){
-                    SetBit(d_dmg, b*NN + iind);
-                    printf("Bond broken");
-                }else{
-                    dil += eij*L*L*L;
+                    double A = dx2+uj-ui;
+                    double B = dy2+vj-vi;
+                    double C = dz2+wj-wi;
+                    double LN = sqrt(A*A + B*B + C*C);
+                    double eij = LN - L0;
+                    if (eij/L0 > ecrit){
+                        SetBit(d_dmg, b*NN + iind);
+                        printf("Bond broken");
+                    }else{
+                        dil += eij*L*L*L;
+                    }
                 }
-
             }
         }
         d_dil[iind] = dil*3/mi;
     }
 }
 
-__global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, double *d_F, 
+__global__ void calcForce(float *d_Sf, double *d_u, double *d_dil, double *d_m, bool *d_dmg, double *d_F, 
         double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W,
-        double *d_Ft, double *d_m) {
+        double *d_Ft, bool *d_chi) {
 
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
@@ -172,62 +174,47 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
     float yi = L*(j+HLF) + yl;
     float zi = L*(k+HLF) + zl;
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double ui = d_u[iind];
         double vi = d_u[NN+iind];
         double wi = d_u[2*NN+iind];
-        double dili = d_dil[iind];
-        double mi = d_m[iind];
         double ki = pow(d_k[iind],penal);
+        double mi = d_m[iind];
+        double dili = d_dil[iind];
 
         double fx = ZER;
         double fy = ZER;
         double fz = ZER;
 
-        double Wsm = ki*kappa*dili*dili/2;
+        double Wsm = 0;
 
         for (int64_t b = 0;b<NB;b++){
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
-                double uj = d_u[jind];
-                double vj = d_u[NN+jind];
-                double wj = d_u[2*NN+jind];
-                double dilj = d_dil[jind];
-                double L0 = L0s[b];
-                double A = dx2+uj-ui;
-                double B = dy2+vj-vi;
-                double C = dz2+wj-wi;
-                double LN = sqrt(A*A + B*B + C*C);
-                double eij = LN - L0;
-                double mj = d_m[jind];
-                double kj = pow(d_k[jind],penal);
-                // double fsm = (ki*dili + kj*dilj + (ki+kj)/2*eij/L0*fmlt);
-                
-                double tij = ki*(3*kappa*dili + am*(eij/L0 - dili/3))/mi; // ADD IN ki, kj!!
-                double tji = kj*(3*kappa*dilj + am*(eij/L0 - dilj/3))/mj;
-                double fsm = (tij + tji)*L*L*L;
-
-                // double Wi = ki*(kappa*dili*dili/2/mi + am/mi/2*(eij/L0 - dili/3)*(eij - dili*L0/3));
-                // double Wj = kj*(kappa*dilj*dilj/2/mj + am/mj/2*(eij/L0 - dilj/3)*(eij - dilj*L0/3));
-                // Wsm += (Wi + Wj)/2;
-
-                // double Wi = ki*(am*(eij/L0 - dili/3))/mi;
-                // Wsm += Wi*Wi;
-
-
-                // double Wi = ki*(1/L0)*(eij - dili*L0/3)*am/mi;
-                // Wsm += Wi*Wi;
-
-                double Wi = (ki*am/mi)*(kj*am/mj)*(1/L0)*(eij - dili*L0/3)*(eij - dili*L0/3);
-                Wsm += Wi;
-
-
-                fx += fsm*A/LN;
-                fy += fsm*B/LN;
-                fz += fsm*C/LN;
+                if(d_chi[jind]){
+                    double uj = d_u[jind];
+                    double vj = d_u[NN+jind];
+                    double wj = d_u[2*NN+jind];
+                    double L0 = sqrt(dx2*dx2 + dy2*dy2 + dz2*dz2);//L0s[b];
+                    double A = dx2+uj-ui;
+                    double B = dy2+vj-vi;
+                    double C = dz2+wj-wi;
+                    double LN = sqrt(A*A + B*B + C*C);
+                    double eij = LN - L0;
+                    double kj = pow(d_k[jind],penal);
+                    double mj = d_m[jind];
+                    double dilj = d_dil[jind];
+                    double tij = ki*(3*kappa*dili + am*(eij/L0 - dili/3))/mi;
+                    double tji = kj*(3*kappa*dilj + am*(eij/L0 - dilj/3))/mj;
+                    double fsm = (tij + tji)*L*L*L;
+                    fx += fsm*A/LN;
+                    fy += fsm*B/LN;
+                    fz += fsm*C/LN;
+                    Wsm += 2*(ki*kj)/(ki + kj)*0.5*0.5*bc*eij*eij/L0*dV;
+                }
             }
         }
 
@@ -243,17 +230,17 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
         double cn = ZER;
         double cd = ZER;
         if(ebcx<0 && vhx != ZER){
-            cn -= ui*ui*(fx - pfx)/(mvec*dt*vhx);
-            cd += ui*ui;
+            cn -= MLT*ui*ui*(fx - pfx)/(ki*mass*dt*vhx);
         }
+        cd += ui*ui;
         if(ebcy<0 && vhy != ZER){
-            cn -= vi*vi*(fy - pfy)/(mvec*dt*vhx);
-            cd += vi*vi;
+            cn -= MLT*vi*vi*(fy - pfy)/(ki*mass*dt*vhy);
         }
+        cd += vi*vi;
         if(ebcz<0 && vhz != ZER){
-            cn -= wi*wi*(fz - pfz)/(mvec*dt*vhx);
-            cd += wi*wi;
+            cn -= MLT*wi*wi*(fz - pfz)/(ki*mass*dt*vhz);
         }
+        cd += wi*wi;
         d_cn[iind] = cn;
         d_cd[iind] = cd;
         
@@ -268,7 +255,7 @@ __global__ void calcForce(float *d_Sf, double *d_dil, double *d_u, bool *d_dmg, 
     }
 }
 
-__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC){
+__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC, double *d_k, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
     int k = iind/(NX*NY);
@@ -280,18 +267,15 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
     float zi = L*(k+HLF) + zl;
     double c = d_c[0];
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double pfx = d_F[iind];
         double pfy = d_F[NN + iind];
         double pfz = d_F[2*NN + iind];
-        double bfx = ZER; 
-        double bfy = ZER; 
-        double bfz = ZER;
         int nbci = d_NBCi[iind];
         if(nbci>=0){
-            bfx = d_NBC[3*nbci];
-            bfy = d_NBC[3*nbci + 1];
-            bfz = d_NBC[3*nbci + 2];
+            pfx += d_NBC[3*nbci];
+            pfy += d_NBC[3*nbci + 1];
+            pfz = d_NBC[3*nbci + 2];
         }
         double vhox = d_vh[iind];
         double vhoy = d_vh[NN + iind];
@@ -299,20 +283,19 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
         double ui = d_u[iind];
         double vi = d_u[NN + iind];
         double wi = d_u[2*NN + iind];
+        double ki = d_k[iind];
 
         double vhx; double vhy; double vhz;
 
         if (tt==0){
-            vhx = dt/mvec * (pfx + bfx) / TWO;
-            vhy = dt/mvec * (pfy + bfy) / TWO;
-            vhz = dt/mvec * (pfz + bfz) / TWO;
+            vhx = dt/max(0.05,ki)/mass * pfx / TWO;
+            vhy = dt/max(0.05,ki)/mass * pfy / TWO;
+            vhz = dt/max(0.05,ki)/mass * pfz / TWO;
         } else {
-            vhx = ((TWO - c*dt)*vhox + TWO*dt/mvec*(pfx + bfx))/(TWO + c*dt);
-            vhy = ((TWO - c*dt)*vhoy + TWO*dt/mvec*(pfy + bfy))/(TWO + c*dt);
-            vhz = ((TWO - c*dt)*vhoz + TWO*dt/mvec*(pfz + bfz))/(TWO + c*dt);
+            vhx = ((TWO - c*dt)*vhox + TWO*dt/max(0.05,ki)/mass*pfx)/(TWO + c*dt);
+            vhy = ((TWO - c*dt)*vhoy + TWO*dt/max(0.05,ki)/mass*pfy)/(TWO + c*dt);
+            vhz = ((TWO - c*dt)*vhoz + TWO*dt/max(0.05,ki)/mass*pfz)/(TWO + c*dt);
         }
-
-        
         int ebcx = d_EBCi[iind];
         int ebcy = d_EBCi[NN + iind];
         int ebcz = d_EBCi[2*NN + iind];
@@ -337,7 +320,7 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
     }
 }
 
-__global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, bool *d_dmg, double *d_kbar){
+__global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, bool *d_dmg, double *d_kbar, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
 
@@ -359,7 +342,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
     double Wt = d_Wt[0];
     double RM = d_RM[0];
 
-    if (Chi(xi,yi,zi)) {
+    if (TestBbox(xi,yi,zi) && d_chi[iind]) {
         double kopti = d_W[iind] *NN * RM / Wt;
         double nsm = kopti*hrad;
         double dsm = hrad;
@@ -367,14 +350,16 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
             float dx2 = sh_Sf[b];
             float dy2 = sh_Sf[NB+b];
             float dz2 = sh_Sf[2*NB+b];
-            if (Chi(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
+            if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
-                double psi = max(ZER, hrad - L0s[b]);
-                nsm += psi * d_W[jind] * NN * RM / Wt;
-                dsm += psi;
+                if(d_chi[jind]){
+                    double psi = max(ZER, hrad - L0s[b]);
+                    nsm += psi * d_W[jind] * NN * RM / Wt;
+                    dsm += psi;
+                }
             }
         }
-        d_kbar[iind] = max(0.00001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.0001, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 
