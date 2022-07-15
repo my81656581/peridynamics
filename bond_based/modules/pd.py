@@ -258,7 +258,7 @@ class PDModel:
 			cn = 0.0
 		if (cn > 2.0):
 			cn = 1.9
-		return np.array([2], dtype = self.dtype)
+		return np.array([cn], dtype = self.dtype)
 
 	def solve(self, NT, tol = None, t0 = None):
 		NN = self.geom.NN
