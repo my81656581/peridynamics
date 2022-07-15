@@ -178,7 +178,7 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
         if(nbci>=0){
             pfx += d_NBC[3*nbci];
             pfy += d_NBC[3*nbci + 1];
-            pfz = d_NBC[3*nbci + 2];
+            pfz += d_NBC[3*nbci + 2];
         }
         double vhox = d_vh[iind];
         double vhoy = d_vh[NN + iind];

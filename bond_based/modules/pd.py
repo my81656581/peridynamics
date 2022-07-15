@@ -41,7 +41,7 @@ class PDGeometry:
 			NZ = 1
 		NN = NX*NY*NZ
 		if chi is None:
-			chi = np.ones(NN)
+			chi = np.ones(NN, dtype=np.bool_)
 
 		S = makeStencil(hrad, dim=dim)
 		NB = S.shape[0]
@@ -258,9 +258,9 @@ class PDModel:
 			cn = 0.0
 		if (cn > 2.0):
 			cn = 1.9
-		return np.array([cn], dtype = self.dtype)
+		return np.array([2], dtype = self.dtype)
 
-	def solve(self, NT, tol = None):
+	def solve(self, NT, tol = None, t0 = None):
 		NN = self.geom.NN
 		NB = self.geom.NB
 		TPB = self.TPB
@@ -282,7 +282,9 @@ class PDModel:
 		d_chi = self.d_chi
 		BPG = (NN+TPB-1)//TPB
 		
-		t0 = time.time()
+		if t0 is None:
+			t0 = time.time()
+		ft = 0
 		for tt in range(NT):
 			self.d_calcForce(d_Sf,d_u, d_dmg, d_F, d_vh, d_cd, d_cn, d_EBCi, d_k, d_W, d_Ft, d_chi, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 			cuda.memcpy_htod(d_c, self.evalC())
@@ -293,7 +295,9 @@ class PDModel:
 					self.ft = ft
 				if ft<tol*self.ft:
 					break
-				print(tt, ft/self.ft, time.time()-t0)
+				print(ft/self.ft)
+			# print(self.sum_reduce(d_Ft))
+		# print(tt, time.time()-t0, self.get_C(),ft/self.ft)
 
 	def get_displacement(self):
 		NN = self.geom.NN
@@ -303,8 +307,8 @@ class PDModel:
 	def get_fill(self):
 		return self.d_k.get()
 
-	def get_W(self):
-		return self.d_W.get()
+	def get_C(self):
+		return self.sum_reduce(self.d_W).get()
 
 	def get_coords(self):
 		inds = np.arange(self.geom.NN)
