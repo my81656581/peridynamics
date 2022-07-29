@@ -24,17 +24,17 @@ class Display:
         xs = pd.bcs.x
         ys = pd.bcs.y
         zs = pd.bcs.z
-        M = 4
+        M = 1
         filt = geom.chi
         def update_graph(n):
             pd.solve(num)
-            print(num)
             u,v,w = pd.get_displacement()
             graph._offsets3d = (xs[filt]+M*u[filt], ys[filt]+M*v[filt], zs[filt]+M*w[filt])
 
+        u,v,w = pd.get_displacement()
         fig = plt.figure()
         ax = fig.add_subplot(111, projection='3d')
-        graph = ax.scatter(xs[filt], ys[filt], zs[filt])
+        graph = ax.scatter(xs[filt]+M*u[filt], ys[filt]+M*v[filt], zs[filt]+M*w[filt])
         # manager = plt.get_current_fig_manager()
         # manager.full_screen_toggle()
         ax.set_box_aspect((np.ptp(xs), np.ptp(ys), np.ptp(zs)))

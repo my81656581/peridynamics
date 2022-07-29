@@ -305,3 +305,13 @@ class PDModel:
 		x = self.geom.L*(inds%self.geom.NX + .5)
 		return x, y, z
 
+	def eval_F(self):
+		NN = self.geom.NN
+		EBC = self.bcs.EBC
+		EBCi = self.bcs.EBCi
+		F = self.d_F.get()
+		fx, fy, fz = F[:NN], F[NN:2*NN], F[2*NN:]
+		for e in range(len(EBC)):
+			filt = EBCi==e
+			print([np.sum(fx[filt]), np.sum(fy[filt]), np.sum(fz[filt])])
+

@@ -52,6 +52,12 @@ __device__ void  SetBit(bool A[],  int64_t k ){
     A[k/8] |= 1 << (k%8);
 }
 
+__global__ void zeroT(){
+    if(threadIdx.x == 0 && blockIdx.x == 0){
+        tt = 0;
+    }
+}
+
 __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F, 
         double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W,
         double *d_Ft, bool *d_chi) {
@@ -108,7 +114,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
                     double eij = LN - L0;
                     if (eij/L0 > ecrit){
                         SetBit(d_dmg, b*NN + iind);
-                        printf("Bond broken");
+                        //printf("Bond broken");
                     }else{
                         double kj = pow(d_k[jind],penal);
                         double fsm = 2*(ki*kj)/(ki + kj)*eij/L0*bc*dV;
@@ -158,7 +164,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
     }
 }
 
-__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC, double *d_k, bool *d_chi){
+__global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double *d_F, int *d_NBCi, float *d_NBC, int *d_EBCi, float *d_EBC, float *d_EBC0, double *d_k, bool *d_chi){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
     int k = iind/(NX*NY);
@@ -205,17 +211,20 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
         if(ebcx<0){
             d_u[iind] = ui + dt*vhx;
         }else{
-            d_u[iind] = d_EBC[ebcx]*min(ONE, tt/ntau);
+            float e0 = d_EBC0[ebcx];
+            d_u[iind] = e0 + (d_EBC[ebcx] - e0)*min(ONE, tt/ntau);
         }
         if(ebcy<0){
             d_u[NN+iind] = vi + dt*vhy;
         }else{
-            d_u[NN+iind] = d_EBC[ebcy]*min(ONE, tt/ntau);
+            float e0 = d_EBC0[ebcy];
+            d_u[NN+iind] = e0 + (d_EBC[ebcy] - e0)*min(ONE, tt/ntau);
         }
         if(ebcz<0){
             d_u[2*NN + iind] = wi + dt*vhz;
         }else{
-            d_u[2*NN + iind] = d_EBC[ebcz]*min(ONE, tt/ntau);
+            float e0 = d_EBC0[ebcz];
+            d_u[2*NN + iind] = e0 + (d_EBC[ebcz] - e0)*min(ONE, tt/ntau);
         }
         d_vh[iind] = vhx;
         d_vh[NN + iind] = vhy;

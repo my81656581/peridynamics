@@ -27,7 +27,7 @@ alpha = 0.6
 
 mat = pd.PDMaterial(E, nu, rho)
 geom = pd.PDGeometry(bbox, NX, None, hrad, dim=2)
-bcs = pd.PDBoundaryConditions(geom, ntau)
+bcs = pd.PDBoundaryConditions(geom)
 # bcs.addFixed([[0, 1], [0, 40], [0, 5]], 0, [0,1,2])
 # bcs.addFixed([[79,80], [9, 11], [0, 5]], -1, [1])
 
@@ -36,7 +36,7 @@ bcs.addFixed([[159, 160], [0, 20], [0, 10]], 0, [0,1,2])
 bcs.addFixed([[79,81], [0, 1], [0, 10]], -.4, [1])
 
 opt = pd.PDOptimizer(alpha, volfrac, penal)
-model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32)
+model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32,ntau=ntau)
 
 # model.solve(10000, tol = 0.006)
 
