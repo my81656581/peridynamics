@@ -135,7 +135,7 @@ class PDBoundaryConditions:
 		return rot
 
 class PDOptimizer:
-	def __init__(self, alpha, volfrac, penal, tol=0.00001):
+	def __init__(self, alpha, volfrac, penal, tol=0.0001):
 		self.alpha = alpha
 		self.volfrac = volfrac
 		self.tol = tol
@@ -150,7 +150,7 @@ class PDOptimizer:
 			AM = pd.sum_reduce(self.d_kbar).get()/pd.geom.NN
 			RM = self.volfrac - AM
 		self.d_updateK(pd.d_k, self.d_kbar, pd.d_NBCi, pd.d_EBCi, block = (pd.TPB, 1, 1), grid = ((pd.geom.NN+pd.TPB-1)//pd.TPB, 1 , 1))		
-		
+
 class PDModel:
 	def __init__(self, mat, geom, bcs=None, opt=None, dtype=np.float64, TPB = 128, ntau = 1000):
 		dt = 1
@@ -285,7 +285,7 @@ class PDModel:
 			cn = 1.9
 		return np.array([cn], dtype = self.dtype)
 
-	def solve(self, NT, tol = None, t0 = None):
+	def solve(self, NT, tol = None, t0 = None, minT=500):
 		NN = self.geom.NN
 		NB = self.geom.NB
 		TPB = self.TPB
@@ -313,17 +313,17 @@ class PDModel:
 		if t0 is None:
 			t0 = time.time()
 		for tt in range(NT):
-			self.d_calcForce(d_Sf,d_u, d_dmg, d_F, d_vh, d_cd, d_cn, d_EBCi, d_k, d_W, d_Ft, d_chi, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
+			self.d_calcForce(d_Sf,d_u, d_dmg, d_F, d_vh, d_cd, d_cn, d_EBCi, d_k, d_W, d_Ft, d_chi, d_NBCi, block = (TPB, 1, 1), grid = (BPG, 1 , 1), shared = (4*NB + 1)*4)
 			cuda.memcpy_htod(d_c, self.evalC())
 			self.d_calcDisplacement(d_c, d_u, d_vh, d_F, d_NBCi, d_NBC, d_EBCi, d_EBC, d_EBC0, d_k, d_chi, block = (TPB, 1, 1), grid = (BPG, 1 , 1))
 			
-			if (tt+1)%50==0 and tol != None:
+			if tt>=minT and tt%50==0 and tol != None:
 				ft = self.sum_reduce(d_Ft).get()
 				if ft>self.ft:
 					self.ft = ft
 				if ft<tol*self.ft or ft==0:
 					break
-				print(tt, ft/self.ft, time.time()-t0)
+				# print(tt, ft/self.ft, time.time()-t0)
 		print("Finished: ", tt, time.time()-t0)#, ft/self.ft, time.time()-t0)
 
 	def get_displacement(self):

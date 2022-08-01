@@ -60,7 +60,7 @@ __global__ void zeroT(){
 
 __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F, 
         double *d_vh, double *d_cd, double *d_cn, int *d_EBCi, double *d_k, double *d_W,
-        double *d_Ft, bool *d_chi) {
+        double *d_Ft, bool *d_chi, int *d_NBCi) {
 
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
@@ -157,7 +157,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
         d_F[NN + iind] = fy;
         d_F[2*NN + iind] = fz;
         
-        if(ebcx<0 && ebcy<0 && ebcz<0){
+        if(ebcx<0 && ebcy<0 && ebcz<0 && d_NBCi[iind]<0){
             d_Ft[iind] = sqrt(fx*fx + fy*fy + fz*fz);
             d_W[iind] = Wsm;
         }
@@ -271,7 +271,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
                 }
             }
         }
-        d_kbar[iind] = max(0.0001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.001, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 
