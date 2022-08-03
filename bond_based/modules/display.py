@@ -24,8 +24,8 @@ class Display:
         xs = pd.bcs.x
         ys = pd.bcs.y
         zs = pd.bcs.z
-        M = 1
-        filt = geom.chi
+        M = 3
+        filt = (geom.chi) & (self.pd.get_fill()>0.5)
         def update_graph(n):
             pd.solve(num)
             u,v,w = pd.get_displacement()
@@ -51,7 +51,7 @@ class Display:
             # u,v,w = self.pd.get_displacement()
             # vals = np.sqrt(u**2 + v**2 + w**2)
             vals = self.pd.get_fill()
-            vals[vals<0.8] = 0
+            vals[vals<0.5] = 0
             # vals = vals/np.max(vals)
             vox.mlab_source.scalars = np.reshape(vals,(self.geom.NZ,self.geom.NY,self.geom.NX)).T/np.max(vals)
             yield

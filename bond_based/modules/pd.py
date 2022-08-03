@@ -323,7 +323,7 @@ class PDModel:
 					self.ft = ft
 				if ft<tol*self.ft or ft==0:
 					break
-				# print(tt, ft/self.ft, time.time()-t0)
+				# print(tt, ft, ft/self.ft, time.time()-t0)
 		print("Finished: ", tt, time.time()-t0)#, ft/self.ft, time.time()-t0)
 
 	def get_displacement(self):

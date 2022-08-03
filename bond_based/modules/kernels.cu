@@ -114,7 +114,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
                     double eij = LN - L0;
                     if (eij/L0 > ecrit){
                         SetBit(d_dmg, b*NN + iind);
-                        //printf("Bond broken");
+                        printf("B");
                     }else{
                         double kj = pow(d_k[jind],penal);
                         double fsm = 2*(ki*kj)/(ki + kj)*eij/L0*bc*dV;
@@ -158,7 +158,7 @@ __global__ void calcForce(float *d_Sf, double *d_u, bool *d_dmg, double *d_F,
         d_F[2*NN + iind] = fz;
         
         if(ebcx<0 && ebcy<0 && ebcz<0 && d_NBCi[iind]<0){
-            d_Ft[iind] = sqrt(fx*fx + fy*fy + fz*fz);
+            d_Ft[iind] = abs(vhx) + abs(vhy) + abs(vhz);
             d_W[iind] = Wsm;
         }
     }
@@ -182,7 +182,7 @@ __global__ void calcDisplacement(double *d_c, double *d_u, double *d_vh, double 
         double pfz = d_F[2*NN + iind];
         int nbci = d_NBCi[iind];
         if(nbci>=0){
-            pfx += d_NBC[3*nbci];
+            pfx += d_NBC[3*nbci];//*min(ONE, tt/ntau);
             pfy += d_NBC[3*nbci + 1];
             pfz += d_NBC[3*nbci + 2];
         }
@@ -265,13 +265,13 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
             if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, b*NN + iind)) {
                 int jind = iind + jadd[b];
                 if(d_chi[jind]){
-                    double psi = max(ZER, hrad - L0s[b]);
+                    double psi = max(ZER, hrad - L0s[b])/hrad;
                     nsm += psi * d_W[jind] * NN * RM / Wt;
                     dsm += psi;
                 }
             }
         }
-        d_kbar[iind] = max(0.001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.0001, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 
@@ -279,7 +279,7 @@ __global__ void updateK(double *d_k, double *d_kbar, int *d_NBCi, int *d_EBCi){
     int iind = blockIdx.x * blockDim.x + threadIdx.x;
 
     if(iind<NN){
-        if(d_NBCi[iind]<0 && d_EBCi[iind]<0 && d_EBCi[NN + iind]<0 && d_EBCi[2*NN + iind]<0){
+        if(d_NBCi[iind]<0){// && d_EBCi[iind]<0 && d_EBCi[NN + iind]<0 && d_EBCi[2*NN + iind]<0){
             d_k[iind] = alpha*d_k[iind] + (1 - alpha) * d_kbar[iind];
             d_kbar[iind] = ZER;
         }
