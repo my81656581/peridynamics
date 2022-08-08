@@ -285,7 +285,7 @@ class PDModel:
 			cn = 1.9
 		return np.array([cn], dtype = self.dtype)
 
-	def solve(self, NT, tol = None, t0 = None, minT=500):
+	def solve(self, NT, tol = None, t0 = None, minT=100):
 		NN = self.geom.NN
 		NB = self.geom.NB
 		TPB = self.TPB

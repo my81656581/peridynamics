@@ -271,7 +271,7 @@ __global__ void calcKbar(float *d_Sf, double *d_Wt, double *d_RM, double *d_W, b
                 }
             }
         }
-        d_kbar[iind] = max(0.0001, min(ONE, d_kbar[iind] + nsm / dsm));
+        d_kbar[iind] = max(0.01, min(ONE, d_kbar[iind] + nsm / dsm));
     }
 }
 
@@ -279,7 +279,7 @@ __global__ void updateK(double *d_k, double *d_kbar, int *d_NBCi, int *d_EBCi){
     int iind = blockIdx.x * blockDim.x + threadIdx.x;
 
     if(iind<NN){
-        if(d_NBCi[iind]<0){// && d_EBCi[iind]<0 && d_EBCi[NN + iind]<0 && d_EBCi[2*NN + iind]<0){
+        if(d_NBCi[iind]<0 && d_EBCi[iind]<0 && d_EBCi[NN + iind]<0 && d_EBCi[2*NN + iind]<0){
             d_k[iind] = alpha*d_k[iind] + (1 - alpha) * d_kbar[iind];
             d_kbar[iind] = ZER;
         }

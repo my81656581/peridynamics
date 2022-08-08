@@ -51,7 +51,7 @@ class Display:
             # u,v,w = self.pd.get_displacement()
             # vals = np.sqrt(u**2 + v**2 + w**2)
             vals = self.pd.get_fill()
-            vals[vals<0.5] = 0
+            vals[vals<0.95] = 0
             # vals = vals/np.max(vals)
             vox.mlab_source.scalars = np.reshape(vals,(self.geom.NZ,self.geom.NY,self.geom.NX)).T/np.max(vals)
             yield
