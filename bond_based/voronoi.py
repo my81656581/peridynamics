@@ -17,12 +17,11 @@ bbox = [[0, chi.shape[0]], [0,chi.shape[1]], [0,1]]
 E = 7e8 # Youngs Modulus    
 nu = 0.33 # Poisson's Ratio
 hrad = 3.01 # Radius of "sphere of influence" (horizon)
-rho = 10. # Density of material (affects rate of convergence, but not final equilibrium)
 ntau = 1000 # Number of timesteps over which boundary conditions are applied
 
 NX = int(bbox[0][1]-bbox[0][0])
 
-mat = pd.PDMaterial(E, nu, rho)
+mat = pd.PDMaterial(E, nu)
 geom = pd.PDGeometry(bbox, NX, np.reshape(chi,[-1],order='F'), hrad, dim=2)
 model = pd.PDModel(mat, geom, None, None, dtype=np.float32, ntau=ntau)
 bcs = pd.PDBoundaryConditions(geom)

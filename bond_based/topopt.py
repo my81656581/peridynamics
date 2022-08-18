@@ -12,12 +12,11 @@ from matplotlib import pyplot as plt
 # E = 1
 # nu = 0.25
 # hrad = 3.01
-# rho = 0.1
 # ntau = 500
 # volfrac = 0.25
 # penal = 4
 # alpha = 0.7
-# mat = pd.PDMaterial(E, nu, rho)
+# mat = pd.PDMaterial(E, nu)
 # geom = pd.PDGeometry(bbox, NX, None, hrad, dim=3)
 # bcs = pd.PDBoundaryConditions(geom)
 # bcs.addFixed([[0, .1], [0, 1], [0, 1]], 0, [0,1,2])
@@ -29,12 +28,11 @@ from matplotlib import pyplot as plt
 # E = 210e9
 # nu = 0.25
 # hrad = 3.01
-# rho = 1250
 # ntau = 1000
 # volfrac = 0.17
 # penal = 3
 # alpha = 0.5
-# mat = pd.PDMaterial(E, nu, rho)
+# mat = pd.PDMaterial(E, nu)
 # geom = pd.PDGeometry(bbox, NX, None, hrad, dim=3)
 # bcs = pd.PDBoundaryConditions(geom)
 # x = bcs.x
@@ -51,12 +49,11 @@ from matplotlib import pyplot as plt
 # E = 3e9
 # nu = 0.25
 # hrad = 3.01
-# rho = 1250
 # ntau = 1000
 # volfrac = 0.17
 # penal = 3
 # alpha = 0.3
-# mat = pd.PDMaterial(E, nu, rho)
+# mat = pd.PDMaterial(E, nu)
 # geom = pd.PDGeometry(bbox, NX, None, hrad, dim=3)
 # bcs = pd.PDBoundaryConditions(geom)
 # x = bcs.x
@@ -93,7 +90,7 @@ from matplotlib import pyplot as plt
 
 
 # opt = pd.PDOptimizer(alpha, volfrac, penal)
-# model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32,ntau=ntau)
+# model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32,ntau=ntau,mmlt=0.1)
 # # dply = disp.Display(geom, model, opt, tol = 0.01, num=50000)
 # # dply.launch()
 # for _ in range(50):
@@ -125,7 +122,7 @@ bcs.addFixed([[0, 1], [0, 20], [0, 10]], 0, [0,1,2])
 bcs.addFixed([[159, 160], [0, 20], [0, 10]], 0, [0,1,2])
 bcs.addFixed([[79,81], [0, 1], [0, 10]], -.4, [1])
 opt = pd.PDOptimizer(alpha, volfrac, penal)
-model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32,ntau=ntau)
+model = pd.PDModel(mat, geom, bcs, opt, dtype=np.float32,ntau=ntau,mmlt=0.1)
 
 t0 = time.time()
 for _ in range(50):
