@@ -1,53 +1,81 @@
 from re import U
 import numpy as np
-import pycuda.driver as cuda
+import os
 import pycuda.autoinit
 from pycuda.compiler import SourceModule
-import time
+import pycuda.driver as cuda
 import pycuda.reduction as reduction
 import pycuda.gpuarray as gpuarray
-
-def makeStencil(hrad = 3.01, dim = 3):
-	grad = int(hrad+1)
-	xs = np.arange(-grad, grad+1, dtype=np.int32)
-	if dim==2:
-		XS,YS,ZS = np.meshgrid(xs,xs,[0])
-	else:
-		XS,YS,ZS = np.meshgrid(xs,xs,xs)
-	xs = np.reshape(XS, [-1])
-	ys = np.reshape(YS, [-1])
-	zs = np.reshape(ZS, [-1])
-	rad = (xs**2 + ys**2 + zs**2)**0.5 
-	filt = (rad < hrad) & (rad>0.001)
-	S = np.vstack([xs[filt], ys[filt], zs[filt]]).T
-	R = np.sqrt(np.sum(S**2,axis = 1,keepdims=True))
-	tht = np.arctan2(S[:,0:1], S[:,1:2])
-	phi = np.arctan2(S[:,0:1], S[:,2:3])
-	tsi = np.arctan2(S[:,1:2], S[:,2:3])
-	D = (.75*R>R.T) & (abs(tht-tht.T)<np.pi/8) & (abs(phi-phi.T)<np.pi/8) & (abs(tsi-tsi.T)<np.pi/8)
-	return S, D
+from stltovoxel import convert_meshes
+from stl import mesh
+import time
 
 class PDMaterial:
 	def __init__(self, E, nu, ecrit = 100000, rho = 0):
+		"""Initialize a peridynamic material.
+
+		Keyword arguments:
+		E -- 	Young's modulus
+		nu -- 	Poisson's ratio (for bond based simulation, should be 1/3 for 2D 
+				simulations and 1/4 for 3D simulations)
+		ecrit - Critical strain for bond breakage. 
+		rho --  Material density. Only used for explicit time integration
+		"""
 		self.E = E
 		self.nu = nu
 		self.ecrit = ecrit
 		self.rho = rho
 
 class PDGeometry:
-	def __init__(self, bbox, NX, chi, hrad=3.01, dim = 3):
-		L = np.float64((bbox[0][1] - bbox[0][0])/NX)
-		NY = int(np.round((bbox[1][1] - bbox[1][0])/L))
-		if(dim==3):
-			NZ = int(np.round((bbox[2][1] - bbox[2][0])/L))
-		else:
-			self.thick = bbox[2][1] - bbox[2][0]
-			NZ = 1
-		NN = NX*NY*NZ
-		if chi is None:
-			chi = np.ones(NN, dtype=np.bool_)
+	def __init__(self, NX, hrad=3.01, dim = 3, bbox = None, filename = None, scale = 1, tris = None):
+		"""Initialize a peridynamic material.
 
-		S, D = makeStencil(hrad, dim=dim)
+		Keyword arguments:
+		NX --	Number of divisions in X-direction. Sets simulation resolution
+		hrad -- Horizon radius; radius of peridynamic sphere of influence for each 
+				material pont
+		dim --  Problem dimensionality (2 or 3)
+		bbox -- Bounding box, used to specify a solid rectangular geometry
+		filename --	File name for reading geometry from stl or stored voxelization
+		scale --	Length scale to be applied to imported geometry; length of grid
+					spacing
+		"""
+		if filename is None:
+			# Use bounding box to establish a rectangular geometry
+			L = np.float64((bbox[0][1] - bbox[0][0])/NX)
+			NY = int(np.round((bbox[1][1] - bbox[1][0])/L))
+			if(dim==3):
+				NZ = int(np.round((bbox[2][1] - bbox[2][0])/L))
+			else:
+				self.thick = bbox[2][1] - bbox[2][0]
+				NZ = 1
+			NN = NX*NY*NZ
+			self.chi = np.ones(NN, dtype=np.bool_)
+			# tris = None
+		elif bbox is None:
+			# Load voxel data from either an STL stored in geoemtries folder, or from
+			# a voxel numpy array in temp folder.
+			chi = self.loadVoxels(filename, NX)
+			NX, NY, NZ = chi.shape
+			self.chi = np.reshape(chi,[-1],order='F')
+			NN = NX*NY*NZ
+			L = scale
+			bbox = [[0, NX*scale], [0, NY*scale], [0, NZ*scale]]
+			stlfilename = '../geometries/' + filename + '.stl'
+			if os.path.exists(stlfilename):
+				# If stl is available, load in triangles to establish initial bonds
+				stldat = mesh.Mesh.from_file(stlfilename)
+				tris = np.hstack([stldat.v0, stldat.v1, stldat.v2]).flatten()
+				sclfac = (NX-1)/(np.max(stldat.v0) - np.min(stldat.v0))
+				tris *= sclfac
+				self.sclfac = sclfac
+			else:
+				tris = None
+		else:
+			raise Exception("Must specify bounding box for a rectangular geometry, or" +
+													"file name for imported geometry")
+
+		S = self.makeStencil(hrad, dim=dim)
 		NB = S.shape[0]
 		Sf = (L*S).astype(np.float32)
 		L0s = (np.sum((L*S)**2, axis=1)**0.5).astype(np.float32)
@@ -65,8 +93,47 @@ class PDGeometry:
 		self.jadd = jadd
 		self.hrad = hrad
 		self.bbox = bbox
-		self.chi = chi
-		self.D = D
+		self.triangles = tris
+
+	def makeStencil(self, hrad = 3.01, dim = 3):
+		grad = int(hrad+1)
+		xs = np.arange(-grad, grad+1, dtype=np.int32)
+		if dim==2:
+			XS,YS,ZS = np.meshgrid(xs,xs,[0])
+		else:
+			XS,YS,ZS = np.meshgrid(xs,xs,xs)
+		xs = np.reshape(XS, [-1])
+		ys = np.reshape(YS, [-1])
+		zs = np.reshape(ZS, [-1])
+		rad = (xs**2 + ys**2 + zs**2)**0.5 
+		filt = (rad < hrad) & (rad>0.001)
+		S = np.vstack([xs[filt], ys[filt], zs[filt]]).T
+		return S
+
+	def loadVoxels(self, filename, NX):
+		voxfile = '' #'../temp/' + filename + '_vox_'+str(NX)+'.npy'
+		if not os.path.exists(voxfile):
+			return self.convert_file('../geometries/' + filename + '.stl', voxfile, resolution=NX)
+		else:
+			return np.load(voxfile)
+
+	def convert_file(self, input_file_path, output_file_path, resolution=100, parallel=False):
+		meshes = []
+		mesh_obj = mesh.Mesh.from_file(input_file_path)
+		org_mesh = np.hstack((mesh_obj.v0[:, np.newaxis], mesh_obj.v1[:, np.newaxis], mesh_obj.v2[:, np.newaxis]))
+		meshes.append(org_mesh)
+
+		vol, scale, shift = convert_meshes(meshes, resolution, parallel)
+		vol = np.transpose(vol, [2,1,0])
+		# from matplotlib import pyplot as plt
+		# ax = plt.figure().add_subplot(projection='3d')
+		# ax.voxels(vol, edgecolor='k')
+		# plt.show()
+		# print(scale, shift)
+		vol = vol.astype(bool)
+		if output_file_path is not None:
+			np.save(output_file_path, vol)
+		return vol
 
 class PDBoundaryConditions:
 	def __init__(self, geom, EBC0 = None):
@@ -126,20 +193,36 @@ class PDBoundaryConditions:
 				self.EBCi[d, filt] = len(self.EBC) + np.arange(len(vals[d]))
 				[self.EBC.append(val) for val in vals[d]]
 
-	def getRotFunc(self, tht, ax = 0, long=None):
+	def getRotFunc(self, tht, ax = 0, long=None, offset=[0,0,0]):
 		def rot(x,y,z):
-			if ax==2:
-				rmat = np.array([[np.cos(tht), np.sin(-tht), 0],
-								[np.sin(tht), np.cos(tht), 0],
-								[0, 0, 1]])
-			elif ax==0:
+			if ax==0:
 				rmat = np.array([[1, 0, 0],
 								[0, np.cos(tht), np.sin(-tht)],
 								[0, np.sin(tht), np.cos(tht)]])
-			xnew = np.dot(rmat,np.vstack([x,y,z]))
-			if long is not None:
-				return [long*np.ones(x.shape), xnew[1]-y, xnew[2]-z]
-			return [None, xnew[1]-y, xnew[2]-z]#[xnew[0]-x, xnew[1]-y, xnew[2]-z]
+			elif ax==1:
+				rmat = np.array([[np.cos(tht), 0, np.sin(-tht)],
+								[0, 1, 0],
+								[np.sin(tht), 0, np.cos(tht)]])
+			elif ax==2:
+				rmat = np.array([[np.cos(tht), np.sin(-tht), 0],
+								[np.sin(tht), np.cos(tht), 0],
+								[0, 0, 1]])
+			xnew = np.dot(rmat,np.vstack([x + offset[0],y + offset[1],z + offset[2]]))
+			xnew[0] -= offset[0]
+			xnew[1] -= offset[1]
+			xnew[2] -= offset[2]
+			if ax==0:
+				if long is not None:
+					return [long*np.ones(x.shape), xnew[1]-y, xnew[2]-z]
+				return [None, xnew[1]-y, xnew[2]-z]
+			if ax==1:
+				if long is not None:
+					return [xnew[0]-x, long*np.ones(y.shape), xnew[2]-z]
+				return [xnew[0]-x, None, xnew[2]-z]
+			if ax==2:
+				if long is not None:
+					return [xnew[0]-x, xnew[1]-y, long*np.ones(z.shape)]
+				return [xnew[0]-x, xnew[1]-y, None]
 		return rot
 
 class PDOptimizer:
@@ -161,7 +244,7 @@ class PDOptimizer:
 
 class PDModel:
 	def __init__(self, mat, geom, bcs=None, opt=None, dtype=np.float64, TPB = 128, ntau = 1000, mmlt = 0.3, 
-					SCR=False, initcuts=False, ADR=True, dt = 1):
+					SCR=False, ADR=True, dt = 1):
 		"""Initialize a peridynamic model object.
 
 		Keyword arguments:
@@ -177,7 +260,6 @@ class PDModel:
 				quicker simulations; higher number produces more stable simulations
 		SCR -- boolean flag determining if surface & horizon shape corrections are applied (ususally only relevant
 				in crack growth modelling)
-		initcuts -- boolean flag specificying whether "initCuts" kernel is run to initialize slits/cracks
 		ADR -- boolean flag specifying if adaptive dynamic relaxation is used. If false, euler method is used.
 		"""
 		if geom.dim==2:
@@ -244,8 +326,12 @@ class PDModel:
 			dsize = 4
 			src = src.replace("double","float")
 			src = src.replace("sqrt","sqrtf")
+		if geom.triangles is not None:
+			src = src.replace("NTRr",str(len(geom.triangles)/9))
+		else:
+			src = src.replace("NTRr",str(0))
 		self.dtype = dtype
-		mod = SourceModule(src, options=["--use_fast_math","-lineinfo"], keep=True) # Set keep=True, --lineinfo for source!
+		mod = SourceModule(src, options=["--use_fast_math"]) # Set keep=True, --lineinfo for source!
 
 		self.d_u = gpuarray.GPUArray([3*geom.NN], dtype)
 		self.d_vh = gpuarray.GPUArray([3*geom.NN], dtype)
@@ -253,7 +339,6 @@ class PDModel:
 		self.d_cd = gpuarray.GPUArray([geom.NN], dtype)
 		self.d_cn = gpuarray.GPUArray([geom.NN], dtype)
 		self.d_Sf = gpuarray.to_gpu(geom.Sf)
-		self.d_D = gpuarray.to_gpu(geom.D)
 		self.d_dmg = gpuarray.GPUArray([((geom.NB)*geom.NN + 7)//8], np.uint8)
 		self.d_chi = gpuarray.to_gpu(geom.chi.astype(np.bool_))
 		if bcs is not None:
@@ -279,9 +364,10 @@ class PDModel:
 			self.d_calcDisplacement = mod.get_function("calcDisplacement")
 		else:
 			self.d_calcDisplacement = mod.get_function("calcDisplacementEuler")
-		if initcuts:
+		if geom.triangles is not None:
+			self.d_triangles = gpuarray.to_gpu(geom.triangles)
 			self.d_initCuts = mod.get_function("initCuts")
-			self.d_initCuts(self.d_Sf, self.d_dmg, block = (TPB, 1, 1), grid = ((geom.NN+TPB-1)//TPB, 1 , 1), shared = (4*geom.NB + 1)*4)
+			self.d_initCuts(self.d_Sf, self.d_triangles, self.d_chi, self.d_dmg, block = (TPB, 1, 1), grid = ((geom.NN+TPB-1)//TPB, 1 , 1), shared = (4*geom.NB + 1)*4)
 		if SCR:
 			self.d_fncst = gpuarray.GPUArray([3*geom.NN], dtype)
 			self.d_initSCR = mod.get_function("setSCR")

@@ -20,6 +20,8 @@ __device__ __constant__ double rho = rhor;
 __device__ __constant__ double MLT = MLTr;
 __device__ __constant__ double emod = emodr;
 
+__device__ __constant__ int NTR = NTRr;
+
 __device__ __constant__ float xh = xhr;
 __device__ __constant__ float xl = xlr;
 __device__ __constant__ float yh = yhr;
@@ -53,49 +55,37 @@ __device__ void  SetBit(uint8_t *A,  int64_t k ){
     A[k/8] |= 1 << (k%8);
 }
 
+__device__ float signedVolume(float p1x, float p1y, float p1z,
+                              float p2x, float p2y, float p2z,
+                              float p3x, float p3y, float p3z,
+                              float p4x, float p4y, float p4z){
+    float cpi = (p2y-p1y)*(p3z-p1z) - (p2z-p1z)*(p3y-p1y);
+    float cpj = (p2z-p1z)*(p3x-p1x) - (p2x-p1x)*(p3z-p1z);
+    float cpk = (p2x-p1x)*(p3y-p1y) - (p2y-p1y)*(p3x-p1x);
+    return (cpi*(p4x-p1x)+cpj*(p4y-p1y)+cpk*(p4z-p1z))/6;
+}
+
+__device__ bool lineTriangleIntersection(float tx1, float ty1, float tz1, float tx2, 
+    float ty2, float tz2, float tx3, float ty3, float tz3, float lx1, float ly1,
+    float lz1, float lx2, float ly2, float lz2){
+    float sv1 = signedVolume(lx1,ly1,lz1,tx1,ty1,tz1,tx2,ty2,tz2,tx3,ty3,tz3);
+    float sv2 = signedVolume(lx2,ly2,lz2,tx1,ty1,tz1,tx2,ty2,tz2,tx3,ty3,tz3);
+    float sv3 = signedVolume(lx1,ly1,lz1,lx2,ly2,lz2,tx1,ty1,tz1,tx2,ty2,tz2);
+    float sv4 = signedVolume(lx1,ly1,lz1,lx2,ly2,lz2,tx2,ty2,tz2,tx3,ty3,tz3);
+    float sv5 = signedVolume(lx1,ly1,lz1,lx2,ly2,lz2,tx3,ty3,tz3,tx1,ty1,tz1);
+    return sv1*sv2<=0 && sv3*sv4>=0 && sv4*sv5>=0;
+}
+
 __global__ void zeroT(){
     if(threadIdx.x == 0 && blockIdx.x == 0){
         tt = 0;
     }
 }
 
-// __global__ void initCuts(float *d_Sf, bool *d_D, bool *d_chi, uint8_t *d_dmg){
-//     int tix = threadIdx.x;
-//     int iind = blockIdx.x * blockDim.x + tix;
-//     int k = iind/(NX*NY);
-//     int j = iind%(NX*NY)/NX;
-//     int i = iind%NX;
-//     if(tix<NB){
-//         sh_Sf[tix] = d_Sf[tix];
-//         sh_Sf[NB+tix] = d_Sf[NB+tix];
-//         sh_Sf[2*NB+tix] = d_Sf[2*NB+tix];
-//     }
-//     __syncthreads();
-//     float xi = L*(i+HLF) + xl;
-//     float yi = L*(j+HLF) + yl;
-//     float zi = L*(k+HLF) + zl;
-//     if (TestBbox(xi,yi,zi) && d_chi[iind]) {
-//         for (int64_t b = 0;b<NB;b++){
-//             float dx2 = sh_Sf[b];
-//             float dy2 = sh_Sf[NB+b];
-//             float dz2 = sh_Sf[2*NB+b];
-//             if (TestBbox(xi+dx2, yi+dy2, zi+dz2) && !TestBit(d_dmg, NB*iind+b)) {
-//                 int jind = iind + jadd[b];
-//                 if(d_chi[jind]){
-//                     for (int64_t b2 = 0;b2<NB;b2++){
-//                         if(d_D[b*NB + b2] && !d_chi[iind + jadd[b2]]){
-//                             SetBit(d_dmg, NB*iind+b);
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//     }
-// }
-
-__global__ void initCuts(float *d_Sf, uint8_t *d_dmg){
+__global__ void initCuts(float *d_Sf, float *d_triangles, bool *d_chi, uint8_t *d_dmg){
     int tix = threadIdx.x;
     int iind = blockIdx.x * blockDim.x + tix;
+
     int k = iind/(NX*NY);
     int j = iind%(NX*NY)/NX;
     int i = iind%NX;
@@ -108,14 +98,30 @@ __global__ void initCuts(float *d_Sf, uint8_t *d_dmg){
     float xi = L*(i+HLF) + xl;
     float yi = L*(j+HLF) + yl;
     float zi = L*(k+HLF) + zl;
+
     if (TestBbox(xi,yi,zi)) {
-        for (int64_t b = 0;b<NB;b++){
-            float dx2 = sh_Sf[b];
-            float dy2 = sh_Sf[NB+b];
-            float dz2 = sh_Sf[2*NB+b];
-            float intsct = xi - dx2*yi/dy2;
-            if (yi*(yi+dy2)<0 && intsct>=-.005-.01*L && intsct<=.005+.01*L){
-                SetBit(d_dmg, NB*iind+b);      
+        for (int64_t tr = 0; tr<NTR; tr++){
+            float c1x = d_triangles[tr*9];
+            float c1y = d_triangles[tr*9+1];
+            float c1z = d_triangles[tr*9+2];
+            float c2x = d_triangles[tr*9+3];
+            float c2y = d_triangles[tr*9+4];
+            float c2z = d_triangles[tr*9+5];
+            float c3x = d_triangles[tr*9+6];
+            float c3y = d_triangles[tr*9+7];
+            float c3z = d_triangles[tr*9+8];
+
+            if ((abs(c1x-xi)<(hrad+1)*L && abs(c1y-yi)<(hrad+1)*L && abs(c1z-zi)<(hrad+1)*L) ||
+                (abs(c2x-xi)<(hrad+1)*L && abs(c2y-yi)<(hrad+1)*L && abs(c2z-zi)<(hrad+1)*L) ||
+                (abs(c3x-xi)<(hrad+1)*L && abs(c3y-yi)<(hrad+1)*L && abs(c3z-zi)<(hrad+1)*L)){
+                for (int64_t b = 0;b<NB;b++){
+                    float xj = xi + sh_Sf[b];
+                    float yj = yi + sh_Sf[NB+b];
+                    float zj = zi + sh_Sf[2*NB+b];
+                    if (lineTriangleIntersection(c1x,c1y,c1z,c2x,c2y,c2z,c3x,c3y,c3z,xi,yi,zi,xj,yj,zj)){
+                        SetBit(d_dmg, NB*iind+b);
+                    }
+                }
             }
         }
     }
